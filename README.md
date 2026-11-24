@@ -52,9 +52,11 @@ deploy/              Docker, compose, systemd et installateur
 data/public/lists/   fichiers publiés à l’exécution
 ```
 
-## Compiler
+## Compilation
 
 Prérequis : Go 1.22 ou supérieur, Node.js 20 ou supérieur et npm. La compilation finale n’utilise pas cgo.
+
+Sur un clone neuf, le frontend doit être construit avant toute compilation Go afin de produire les fichiers à embarquer dans `web/dist` :
 
 ```sh
 go mod tidy

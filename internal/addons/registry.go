@@ -4,13 +4,17 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"hydra/internal/validate"
 )
 
 type Status string
 
 const (
-	StatusDetected Status = "detected_unvalidated"
-	StatusReview   Status = "manual_review"
+	StatusDetected  Status = "detected_unvalidated"
+	StatusReview    Status = "manual_review"
+	StatusPlausible Status = "plausible_local"
+	StatusInvalid   Status = "invalid_local"
 )
 
 type Addon struct {
@@ -23,6 +27,7 @@ type Evidence struct {
 	Service  string `json:"service"`
 	Redacted string `json:"redacted"`
 	Hash     string `json:"hash"`
+	Value    string `json:"-"`
 }
 
 type Result struct {
@@ -30,6 +35,7 @@ type Result struct {
 	Quota     string    `json:"quota"`
 	Scope     string    `json:"scope"`
 	Action    string    `json:"suggested_action"`
+	Reason    string    `json:"reason"`
 	CheckedAt time.Time `json:"checked_at"`
 }
 
@@ -95,5 +101,15 @@ func (r *Registry) Validate(_ context.Context, evidence Evidence) Result {
 	if _, ok := r.addons[service]; !ok {
 		service = "generic"
 	}
-	return Result{Status: StatusDetected, Quota: "non interrogé", Scope: service + ", preuve locale uniquement", Action: action, CheckedAt: time.Now().UTC()}
+	verdict := validate.Check(service, evidence.Value)
+	result := Result{Quota: "non interrogé", Scope: service + ", preuve locale uniquement", Reason: verdict.Reason, Action: action, CheckedAt: time.Now().UTC()}
+	switch verdict.Verdict {
+	case validate.Plausible:
+		result.Status = StatusPlausible
+	case validate.Doubtful:
+		result.Status = StatusReview
+	default:
+		result.Status = StatusInvalid
+	}
+	return result
 }

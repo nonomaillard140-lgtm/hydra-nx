@@ -1,0 +1,38 @@
+[Unit]
+Description=HYDRA — inventaire défensif de surface
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hydra
+Group=hydra
+WorkingDirectory=/opt/hydra
+ExecStart=/opt/hydra/nx serve --data /var/lib/hydra --addr 127.0.0.1:8080 --secure-cookie
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/hydra
+
+[Install]
+WantedBy=multi-user.target

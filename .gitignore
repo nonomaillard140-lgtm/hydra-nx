@@ -1,0 +1,13 @@
+/nx
+/nx-linux-*
+/data/*.db*
+/data/master.key
+/data/license_ed25519.json
+/data/.doctor
+/web/node_modules/
+*.tar.gz
+node_modules/
+web/dist/
+dist/
+*.tar.gz
+data/

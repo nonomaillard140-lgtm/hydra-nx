@@ -1,0 +1,45 @@
+import { useEffect, useState } from 'react';
+import { BellRing, KeyRound, MailCheck, Save, Send, Trash2 } from 'lucide-react';
+import { api } from './api';
+import type { LicenseItem, NotificationItem, SendItem } from './types';
+import { DataTable, Empty, Feedback, Field, PageTitle, date, formData, submitForm } from './ui';
+
+type Notify = (message: string, kind?: 'error' | 'success') => void;
+
+export function NotificationsPage({ notify }: { notify: Notify }) {
+  const [items, setItems] = useState<NotificationItem[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const load = async () => { try { setItems(await api<NotificationItem[]>('/api/notifications')); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Chargement impossible'); } };
+  useEffect(() => { void load(); }, []);
+  const payload = (data: FormData) => ({ addon: data.get('addon'), channel: data.get('channel'), target: data.get('target'), enabled: data.get('enabled') === 'on', secrets: { bot_token: data.get('bot_token'), secret: data.get('webhook_secret') } });
+  const save = async (event: React.FormEvent<HTMLFormElement>) => { const data = formData(event); await submitForm(() => api('/api/notifications', { method: 'POST', body: JSON.stringify(payload(data)) }), setBusy, notify, 'Notification enregistrée'); await load(); };
+  const test = async (event: React.MouseEvent<HTMLButtonElement>) => { const form = event.currentTarget.form; if (!form || !form.reportValidity()) return; await submitForm(() => api('/api/notifications/test', { method: 'POST', body: JSON.stringify(payload(new FormData(form))) }), setBusy, notify, 'Test de notification réussi'); };
+  const remove = async (id: number) => { await submitForm(() => api(`/api/notifications/${id}`, { method: 'DELETE' }), setBusy, notify, 'Notification supprimée'); await load(); };
+  return <section><PageTitle eyebrow="TEMPS RÉEL" title="Notifications" description="Telegram, Discord et webhook HTTPS. Les messages contiennent uniquement hôte, type et preuve rédigée." /><Feedback message={error} kind="error" />
+    <form className="work-form" onSubmit={save}><div className="form-grid three"><Field label="Addon"><input name="addon" defaultValue="*" required /></Field><Field label="Canal"><select name="channel"><option value="telegram">Telegram</option><option value="discord">Discord</option><option value="webhook">Webhook</option><option value="smtp">SMTP de contrôle</option></select></Field><Field label="Destination" hint="Chat ID ou URL HTTPS"><input name="target" required /></Field></div><div className="form-grid two"><Field label="Jeton bot Telegram"><input name="bot_token" type="password" autoComplete="off" /></Field><Field label="Secret webhook"><input name="webhook_secret" type="password" autoComplete="off" /></Field></div><label className="check"><input type="checkbox" name="enabled" defaultChecked /><span>Route activée</span></label><div className="button-row"><button className="primary" disabled={busy}><Save size={16} />Enregistrer</button><button type="button" className="secondary" disabled={busy} onClick={(e) => void test(e)}><BellRing size={16} />Tester</button></div></form>
+    {items.length === 0 ? <Empty>Aucune route de notification.</Empty> : <DataTable label="Routes de notification" headers={['Addon', 'Canal', 'Destination', 'État', 'Action']}>{items.map((item) => <tr key={item.id}><td>{item.addon}</td><td>{item.channel}</td><td className="mono">{item.target}</td><td>{item.enabled ? 'activée' : 'désactivée'}</td><td><button className="icon-button danger" onClick={() => void remove(item.id)} aria-label="Supprimer la route"><Trash2 size={16} /></button></td></tr>)}</DataTable>}
+  </section>;
+}
+
+export function SendPage({ notify }: { notify: Notify }) {
+  const [history, setHistory] = useState<SendItem[]>([]); const [busy, setBusy] = useState(false); const [configured, setConfigured] = useState('');
+  const load = async () => { try { setHistory(await api<SendItem[]>('/api/send/history')); } catch (reason) { notify(reason instanceof Error ? reason.message : 'Chargement impossible', 'error'); } };
+  useEffect(() => { void load(); }, []);
+  const configure = async (event: React.FormEvent<HTMLFormElement>) => { const data = formData(event); await submitForm(() => api('/api/send/config', { method: 'POST', body: JSON.stringify({ host: data.get('host'), port: Number(data.get('port')), username: data.get('username'), password: data.get('password'), from: data.get('from'), control_address: data.get('control_address') }) }), setBusy, notify, 'Transport SMTP chiffré enregistré'); setConfigured(String(data.get('control_address'))); };
+  const send = async (event: React.FormEvent<HTMLFormElement>) => { const data = formData(event); await submitForm(() => api('/api/send/control', { method: 'POST', body: JSON.stringify({ subject: data.get('subject'), body: data.get('body') }) }), setBusy, notify, 'Message de contrôle envoyé'); await load(); };
+  return <section><PageTitle eyebrow="VOIE DE CONTRÔLE" title="Envoi SMTP" description="Un seul destinataire de contrôle, fixé dans la configuration. Aucun envoi par lot et aucun credential découvert ne sont utilisés." />
+    <div className="two-columns"><form className="work-form" onSubmit={configure}><h2><KeyRound size={18} />Transport configuré par l’opérateur</h2><div className="form-grid two"><Field label="Hôte SMTP"><input name="host" required placeholder="smtp.example.com" /></Field><Field label="Port" hint="0 = détection 587/465/25"><input name="port" type="number" min="0" max="65535" defaultValue="587" required /></Field></div><div className="form-grid two"><Field label="Utilisateur"><input name="username" autoComplete="off" /></Field><Field label="Mot de passe"><input name="password" type="password" autoComplete="new-password" /></Field></div><Field label="Expéditeur"><input name="from" type="email" required /></Field><Field label="Adresse de contrôle unique"><input name="control_address" type="email" required /></Field><button className="primary" disabled={busy}><Save size={16} />Enregistrer</button></form>
+    <form className="work-form" onSubmit={send}><h2><MailCheck size={18} />Message de contrôle</h2>{configured && <p className="scope-note">Destination: {configured}</p>}<Field label="Sujet"><input name="subject" required maxLength={200} defaultValue="Contrôle HYDRA" /></Field><Field label="Corps texte"><textarea name="body" required rows={8} defaultValue="Ce message vérifie le transport SMTP configuré par l’opérateur." /></Field><button className="primary" disabled={busy}><Send size={16} />Envoyer au contrôle</button></form></div>
+    <div className="section-heading"><h2>Journal d’envoi</h2></div>{history.length === 0 ? <Empty>Aucun envoi enregistré.</Empty> : <DataTable label="Journal des envois" headers={['De', 'Vers', 'Sujet', 'Statut', 'Erreur', 'Date']}>{history.map((item) => <tr key={item.id}><td>{item.from_addr}</td><td>{item.to_addr}</td><td>{item.subject}</td><td><span className={`state ${item.status}`}>{item.status}</span></td><td>{item.error || '—'}</td><td>{date(item.sent_at)}</td></tr>)}</DataTable>}
+  </section>;
+}
+
+type LicenseSummary = { licenses: LicenseItem[]; credits_remaining: number; daily_limit: number; public_key: string; verification: string };
+export function LicensePage() {
+  const [data, setData] = useState<LicenseSummary | null>(null); const [error, setError] = useState('');
+  useEffect(() => { api<LicenseSummary>('/api/license').then(setData).catch((reason) => setError(reason instanceof Error ? reason.message : 'Chargement impossible')); }, []);
+  return <section><PageTitle eyebrow="LICENCE HORS LIGNE" title="Accès et appareils" description="Clés Ed25519 générées localement, durée et nombre d’appareils vérifiés sans service cloud." /><Feedback message={error} kind="error" />
+    <div className="split-band"><div><span className="eyebrow">CRÉDITS RESTANTS</span><strong>{data?.credits_remaining === -1 ? 'illimités admin' : data?.credits_remaining ?? '—'}</strong></div><div><span className="eyebrow">LIMITE QUOTIDIENNE</span><strong>{data?.daily_limit === -1 ? 'illimitée admin' : data?.daily_limit ?? '—'}</strong></div></div>
+    <h2>Licences</h2>{!data?.licenses?.length ? <Empty>Aucune licence sur ce compte. L’administrateur conserve un accès illimité.</Empty> : <DataTable label="Licences" headers={['Plan', 'Expiration', 'Appareils', 'État', 'Clé']}>{data.licenses.map((item) => <tr key={item.id}><td>{item.plan_name}</td><td>{date(item.expires_at)}</td><td>{item.max_devices}</td><td>{item.revoked ? 'révoquée' : 'active'}</td><td className="mono small truncate">{item.key}</td></tr>)}</DataTable>}
+    <h2>Clé publique de vérification</h2><pre className="key-block">{data?.public_key || 'Chargement…'}</pre><p>{data?.verification}</p>
+  </section>;
+}

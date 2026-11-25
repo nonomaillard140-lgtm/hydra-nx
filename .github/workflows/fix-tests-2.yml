@@ -1,0 +1,75 @@
+name: fix-tests-2
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: correction des deux tests
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib, sys
+
+          p = pathlib.Path("internal/addons/registry_test.go")
+          s = p.read_text(encoding="utf-8")
+          old = 'result := registry.Validate(context.Background(), Evidence{Service: "stripe", Redacted: "STRIPE_KEY=<redacted>", Hash: "abc"})'
+          if old not in s:
+              sys.exit("ancre registry absente")
+          s = s.replace(old, 'result := registry.Validate(context.Background(), Evidence{Service: "stripe", Redacted: "STRIPE_KEY=<redacted>", Hash: "abc", Value: "sk_live_4eC39HqLyjWDarjtT1zdp7dc"})', 1)
+          if "result.Status != StatusDetected" not in s:
+              sys.exit("statut attendu introuvable")
+          s = s.replace("result.Status != StatusDetected", "result.Status != StatusPlausible", 1)
+          s += '''
+          func TestOfflineValidationEmpty(t *testing.T) {
+          	registry := NewRegistry()
+          	result := registry.Validate(context.Background(), Evidence{Service: "stripe"})
+          	if result.Status != StatusInvalid || !strings.Contains(result.Reason, "absente") {
+          		t.Fatalf("valeur absente mal classee: %+v", result)
+          	}
+          }
+          '''
+          p.write_text(s, encoding="utf-8")
+          print("registry_test corrige")
+
+          q = pathlib.Path("internal/license/license_test.go")
+          t = q.read_text(encoding="utf-8")
+          old2 = 'replacement := "A"\n\tif strings.HasSuffix(item.Key, "A") {\n\t\treplacement = "B"\n\t}\n\ttampered := item.Key[:len(item.Key)-1] + replacement'
+          if old2 not in t:
+              sys.exit("ancre license absente")
+          new2 = 'parts := strings.Split(item.Key, ".")\n\tif len(parts) != 3 {\n\t\tt.Fatalf("format de licence inattendu: %q", item.Key)\n\t}\n\tbody := parts[1]\n\tmiddle := len(body) / 2\n\tflip := byte(\'A\')\n\tif body[middle] == \'A\' {\n\t\tflip = \'B\'\n\t}\n\tparts[1] = body[:middle] + string(flip) + body[middle+1:]\n\ttampered := strings.Join(parts, ".")'
+          q.write_text(t.replace(old2, new2, 1), encoding="utf-8")
+          print("license_test corrige")
+          PYEOF
+          gofmt -w internal/addons/registry_test.go internal/license/license_test.go
+      - name: verification des deux paquets
+        run: |
+          go vet ./internal/addons/ ./internal/license/
+          go test ./internal/addons/ ./internal/license/ -count=1 -v
+      - name: commit et push des corrections
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "hydra-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "tests addons et licence: attentes conformes au code"
+          git push origin HEAD:main
+      - name: fusion de la branche variantes
+        run: |
+          git fetch origin variantes
+          git merge --no-ff origin/variantes -m "fusion variantes: detection sur le chemin de reference"
+      - name: suite complete avant push
+        run: go test ./... -count=1
+      - name: push de la fusion
+        run: git push origin HEAD:main

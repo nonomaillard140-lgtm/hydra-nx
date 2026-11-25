@@ -1,0 +1,129 @@
+name: add-variants-test
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: variantes
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: détection sur la référence et test d'intégration
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib, sys
+          p = pathlib.Path("internal/scan/scanner.go")
+          s = p.read_text(encoding="utf-8")
+          old = 'exposure, ok := extract.Detect(variant, response.Body)'
+          if old not in s:
+              sys.exit("ancre absente")
+          p.write_text(s.replace(old, 'exposure, ok := extract.Detect(pathConfig.Raw, response.Body)', 1), encoding="utf-8")
+          print("détection basée sur la référence")
+          PYEOF
+          cat > internal/scan/variants_test.go <<'GOEOF'
+          package scan_test
+
+          import (
+          	"context"
+          	"net/http"
+          	"net/http/httptest"
+          	"strings"
+          	"testing"
+          	"time"
+
+          	"hydra/internal/auth"
+          	"hydra/internal/scan"
+          	"hydra/internal/store"
+          )
+
+          func runEncodedScan(t *testing.T, extended bool) []store.Hit {
+          	t.Helper()
+          	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+          		if strings.Contains(r.RequestURI, "%") {
+          			w.WriteHeader(http.StatusOK)
+          			_, _ = w.Write([]byte("APP_NAME=hydra\nDB_PASSWORD=Qm7Tz4Lp9Rv2Xk8Bw3Nc6Yd\n"))
+          			return
+          		}
+          		w.WriteHeader(http.StatusForbidden)
+          		_, _ = w.Write([]byte("forbidden by waf"))
+          	}))
+          	defer server.Close()
+          	ctx := context.Background()
+          	st, err := store.Open(ctx, t.TempDir())
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	defer st.Close()
+          	if err := st.Migrate(ctx); err != nil {
+          		t.Fatal(err)
+          	}
+          	if extended {
+          		if err := st.SetSetting(ctx, "variants_extended", "true"); err != nil {
+          			t.Fatal(err)
+          		}
+          	}
+          	hash, _ := auth.HashPassword("variants-passphrase")
+          	user, err := st.CreateUser(ctx, "variants@example.com", "variants", hash, "admin")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	list, err := st.CreateList(ctx, user.ID, "lab", "L7", []string{strings.TrimPrefix(server.URL, "http://")}, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	path, err := st.CreatePath(ctx, user.ID, "/.env", nil, "test")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	crack, err := st.CreateCrack(ctx, user.ID, list.ID, path.ID, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := scan.NewScanner(st, 3*time.Second, 2).RunCrack(ctx, crack.ID); err != nil {
+          		t.Fatal(err)
+          	}
+          	hits, err := st.Hits(ctx, user.ID, "", "", "", 10)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	return hits
+          }
+
+          func TestEncodedVariantsReachBlockedPath(t *testing.T) {
+          	hits := runEncodedScan(t, true)
+          	if len(hits) == 0 {
+          		t.Fatal("aucun hit via les variantes")
+          	}
+          	if !strings.Contains(hits[0].Path, "%") {
+          		t.Fatalf("le hit ne vient pas d'une forme encodée: %q", hits[0].Path)
+          	}
+          	if hits[0].Service != "smtp" && hits[0].Service != "generic" && hits[0].Service != "database" {
+          		t.Fatalf("service inattendu: %q", hits[0].Service)
+          	}
+          }
+
+          func TestLiteralOnlyMissesBlockedPath(t *testing.T) {
+          	if hits := runEncodedScan(t, false); len(hits) != 0 {
+          		t.Fatalf("le mode par défaut ne devrait rien trouver: %+v", hits)
+          	}
+          }
+          GOEOF
+          gofmt -w internal/
+          git config user.name "hydra-bot"
+          git config user.email "hydra-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "détection sur le chemin de référence et test des variantes"
+          git push origin variantes
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: vet
+        run: go vet ./...
+      - name: build
+        run: go build ./...
+      - name: test
+        run: go test ./...

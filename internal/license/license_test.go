@@ -34,11 +34,18 @@ func TestIssueVerifyAndTamper(t *testing.T) {
 	if err != nil || payload.UserID != user.ID || payload.PlanID != 1 {
 		t.Fatalf("licence valide refusée: %+v %v", payload, err)
 	}
-	replacement := "A"
-	if strings.HasSuffix(item.Key, "A") {
-		replacement = "B"
+	parts := strings.Split(item.Key, ".")
+	if len(parts) != 3 {
+		t.Fatalf("format de licence inattendu: %q", item.Key)
 	}
-	tampered := item.Key[:len(item.Key)-1] + replacement
+	body := parts[1]
+	middle := len(body) / 2
+	flip := byte('A')
+	if body[middle] == 'A' {
+		flip = 'B'
+	}
+	parts[1] = body[:middle] + string(flip) + body[middle+1:]
+	tampered := strings.Join(parts, ".")
 	if _, err := manager.Verify(tampered); err == nil {
 		t.Fatal("licence modifiée acceptée")
 	}

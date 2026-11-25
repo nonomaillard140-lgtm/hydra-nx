@@ -65,6 +65,7 @@ type Finding struct {
 	Redacted  string `json:"redacted"`
 	ValueHash string `json:"value_hash"`
 	Entropy   bool   `json:"entropy"`
+	Value     string `json:"-"`
 }
 
 type Exposure struct {
@@ -81,7 +82,7 @@ func fingerprint(value string) string {
 
 func newFinding(variable, value string) Finding {
 	return Finding{Service: Classify(variable + " " + valuePrefix(value)), Variable: variable,
-		Redacted: variable + "=<redacted>", ValueHash: fingerprint(value)}
+		Redacted: variable + "=<redacted>", ValueHash: fingerprint(value), Value: value}
 }
 
 func valuePrefix(value string) string {

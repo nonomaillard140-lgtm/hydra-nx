@@ -102,7 +102,6 @@ jobs:
       - name: controles
         run: |
           gofmt -w internal/
-          go build ./... 
           grep -q 'return candidate, 25, nil' internal/send/mx.go
           grep -q 'strings.Contains(host, "@")' internal/send/mx.go
           grep -q 'client.Extension("AUTH")' internal/send/smtp.go

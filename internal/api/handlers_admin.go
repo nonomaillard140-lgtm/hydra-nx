@@ -164,7 +164,7 @@ func (s *Server) handleAdminUpdateSettings(w http.ResponseWriter, r *http.Reques
 	if !decodeJSON(w, r, &request) {
 		return
 	}
-	allowed := map[string]bool{"concurrency": true, "timeout_seconds": true, "host_limit": true, "maintenance": true, "public_hits": true, "grace_hours": true}
+	allowed := map[string]bool{"variants_extended": true, "concurrency": true, "timeout_seconds": true, "host_limit": true, "maintenance": true, "public_hits": true, "grace_hours": true}
 	for key, value := range request {
 		if !allowed[key] {
 			writeError(w, http.StatusBadRequest, "réglage non modifiable: "+key)

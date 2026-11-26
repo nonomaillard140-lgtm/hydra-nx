@@ -101,6 +101,9 @@ func (s *Scanner) scanTarget(ctx context.Context, crack store.Crack, target stri
 	variants := pathConfig.Variants
 	if len(variants) == 0 {
 		variants = fuzz.VariantPaths(pathConfig.Raw)
+		if s.store.StringSetting(ctx, "variants_extended", "false") == "true" {
+			variants = fuzz.VariantsExtended(pathConfig.Raw)
+		}
 	}
 	responses := make([]fuzz.Response, 0, len(variants))
 	for _, variant := range variants {
@@ -121,7 +124,7 @@ func (s *Scanner) scanTarget(ctx context.Context, crack store.Crack, target stri
 			continue
 		}
 		stats.Divergent++
-		exposure, ok := extract.Detect(variant, response.Body)
+		exposure, ok := extract.Detect(pathConfig.Raw, response.Body)
 		if !ok || exposure.Confidence < 55 {
 			continue
 		}
@@ -141,9 +144,15 @@ func joinTargetPath(base *url.URL, variant string) (string, error) {
 	if !strings.HasPrefix(variant, "/") || strings.ContainsAny(variant, "\x00\r\n") {
 		return "", errors.New("variante de chemin invalide")
 	}
+	raw, query, _ := strings.Cut(variant, "?")
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", err
+	}
 	copy := *base
-	copy.Path = variant
-	copy.RawPath = ""
+	copy.Path = decoded
+	copy.RawPath = raw
+	copy.RawQuery = query
 	return copy.String(), nil
 }
 

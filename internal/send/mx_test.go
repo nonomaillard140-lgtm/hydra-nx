@@ -3,6 +3,7 @@ package send_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/textproto"
 	"testing"
@@ -185,5 +186,21 @@ func TestResolveHostAcceptsAddressInHostField(t *testing.T) {
 	}
 	if host != "mail.exemple.tld" || port != 587 || resolver.calls != 0 {
 		t.Fatalf("adresse non ramenee au domaine: %s %d %d", host, port, resolver.calls)
+	}
+}
+
+func TestClassifyDestinataireInconnu(t *testing.T) {
+	classified := send.ClassifySMTPError(&textproto.Error{Code: 550, Msg: "5.1.1 The email account that you tried to reach does not exist"})
+	if classified == nil || classified.Code != "destinataire_refuse" || classified.Field != "to" {
+		t.Fatalf("classification inattendue: %+v", classified)
+	}
+}
+
+func TestClassifyConserveLeTypeApresReemballage(t *testing.T) {
+	inner := &textproto.Error{Code: 535, Msg: "auth"}
+	wrapped := fmt.Errorf("envoi SMTP impossible (587: %s): %w", inner.Error(), inner)
+	classified := send.ClassifySMTPError(wrapped)
+	if classified == nil || classified.Code != "auth_refusee" {
+		t.Fatalf("type perdu au reemballage: %+v", classified)
 	}
 }

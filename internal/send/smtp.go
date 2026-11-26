@@ -124,6 +124,7 @@ func sendSMTP(ctx context.Context, config SMTPConfig, subject, body string) erro
 		ports = []int{587, 465, 25}
 	}
 	var errorsSeen []string
+	var lastErr error
 	for _, port := range ports {
 		dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err := sendOnPort(dialCtx, config, port, subject, body)
@@ -131,9 +132,13 @@ func sendSMTP(ctx context.Context, config SMTPConfig, subject, body string) erro
 		if err == nil {
 			return nil
 		}
+		lastErr = err
 		errorsSeen = append(errorsSeen, strconv.Itoa(port)+": "+err.Error())
 	}
-	return fmt.Errorf("envoi SMTP impossible (%s)", strings.Join(errorsSeen, "; "))
+	if lastErr == nil {
+		lastErr = errors.New("envoi SMTP impossible")
+	}
+	return fmt.Errorf("envoi SMTP impossible (%s): %w", strings.Join(errorsSeen, "; "), lastErr)
 }
 
 func sendOnPort(ctx context.Context, config SMTPConfig, port int, subject, body string) error {

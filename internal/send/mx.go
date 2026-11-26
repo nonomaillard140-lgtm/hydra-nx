@@ -144,6 +144,9 @@ func ClassifySMTPError(err error) *SMTPError {
 	}
 	var protocolErr *textproto.Error
 	if errors.As(err, &protocolErr) {
+		if protocolErr.Code == 550 && strings.Contains(protocolErr.Msg, "5.1.1") {
+			return &SMTPError{Code: "destinataire_refuse", Field: "to", Kind: "configuration", Message: "destinataire inconnu du serveur", Cause: err}
+		}
 		switch protocolErr.Code {
 		case 530, 534, 535, 538:
 			return &SMTPError{Code: "auth_refusee", Field: "username", Kind: "configuration", Message: "authentification refusee par le serveur", Cause: err}
@@ -152,6 +155,9 @@ func ClassifySMTPError(err error) *SMTPError {
 		}
 	}
 	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "5.1.1") {
+		return &SMTPError{Code: "destinataire_refuse", Field: "to", Kind: "configuration", Message: "destinataire inconnu du serveur", Cause: err}
+	}
 	if strings.Contains(lower, "authentification smtp refusee") {
 		return &SMTPError{Code: "auth_refusee", Field: "username", Kind: "configuration", Message: "authentification refusee par le serveur", Cause: err}
 	}

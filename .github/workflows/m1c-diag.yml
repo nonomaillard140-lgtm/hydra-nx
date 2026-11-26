@@ -1,0 +1,117 @@
+name: m1c-diag
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: mx en port 25 et hote toleré
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib
+          p = pathlib.Path("internal/send/mx.go")
+          s = p.read_text(encoding="utf-8")
+          if 'return candidate, 25, nil' in s:
+              print("correctif deja en place")
+          else:
+              old = '\thost = strings.TrimSpace(host)\n\tif host != "" {\n'
+              assert old in s, "ancre entete absente"
+              new = '\thost = strings.TrimSpace(host)\n\tif strings.Contains(host, "@") {\n\t\tif _, domain, found := strings.Cut(host, "@"); found {\n\t\t\thost = strings.TrimSuffix(strings.TrimSpace(domain), ".")\n\t\t}\n\t}\n\tif host != "" {\n'
+              s = s.replace(old, new, 1)
+              assert 'return candidate, 587, nil' in s, "ancre mx absente"
+              s = s.replace('return candidate, 587, nil', 'return candidate, 25, nil', 1)
+              p.write_text(s, encoding="utf-8")
+              print("mx patche")
+          PYEOF
+      - name: authentification conditionnelle
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib
+          p = pathlib.Path("internal/send/smtp.go")
+          s = p.read_text(encoding="utf-8")
+          if 'client.Extension("AUTH")' in s:
+              print("auth deja conditionnelle")
+          else:
+              old = '\tif config.Username != "" {\n\t\tif err := client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host)); err != nil {\n\t\t\treturn fmt.Errorf("authentification SMTP refusée: %w", err)\n\t\t}\n\t}'
+              assert old in s, "ancre auth absente"
+              new = '\tif config.Username != "" {\n\t\tif _, advertised := client.Extension("AUTH"); advertised {\n\t\t\tif err := client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host)); err != nil {\n\t\t\t\treturn fmt.Errorf("authentification SMTP refusée: %w", err)\n\t\t\t}\n\t\t}\n\t}'
+              s = s.replace(old, new, 1)
+              p.write_text(s, encoding="utf-8")
+              print("auth patchee")
+          PYEOF
+      - name: tests ajustes
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib
+          for name, old, new in [
+              ("internal/send/mx_test.go", 'port != 587 || resolver.calls != 1', 'port != 25 || resolver.calls != 1'),
+              ("internal/send/hit_test.go", 'config.Port != 587 || resolver.calls != 1', 'config.Port != 25 || resolver.calls != 1'),
+          ]:
+              p = pathlib.Path(name)
+              s = p.read_text(encoding="utf-8")
+              if old in s:
+                  p.write_text(s.replace(old, new, 1), encoding="utf-8")
+                  print("ajuste:", name)
+              else:
+                  print("introuvable:", name)
+          PYEOF
+      - name: tests ajoutes
+        run: |
+          if grep -q TestResolveHostMXUsesPort25 internal/send/mx_test.go; then
+            echo "deja"
+          else
+            cat >> internal/send/mx_test.go <<'GOEOF'
+
+          func TestResolveHostMXUsesPort25(t *testing.T) {
+          	resolver := &fakeResolver{hosts: []string{"mx1.exemple.tld."}}
+          	host, port, err := send.ResolveHost(context.Background(), resolver, "bob@exemple.tld", "")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if host != "mx1.exemple.tld" || port != 25 {
+          		t.Fatalf("mx en port inattendu: %s %d", host, port)
+          	}
+          }
+
+          func TestResolveHostAcceptsAddressInHostField(t *testing.T) {
+          	resolver := &fakeResolver{hosts: []string{"mx.exemple.tld."}}
+          	host, port, err := send.ResolveHost(context.Background(), resolver, "bob@exemple.tld", "bob@mail.exemple.tld")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if host != "mail.exemple.tld" || port != 587 || resolver.calls != 0 {
+          		t.Fatalf("adresse non ramenee au domaine: %s %d %d", host, port, resolver.calls)
+          	}
+          }
+          GOEOF
+          fi
+      - name: rapport
+        run: |
+          {
+            echo "== gofmt -l =="
+            gofmt -l internal/ 2>&1
+            echo "== go build =="
+            go build ./... 2>&1
+            echo "== go vet =="
+            go vet ./... 2>&1
+            echo "== go test send =="
+            go test ./internal/send/ -count=1 2>&1
+          } > suite-report.txt 2>&1
+          git diff > patch.txt
+          cat suite-report.txt
+      - name: publication
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "hydra-bot@users.noreply.github.com"
+          git checkout -b m1c
+          git add -A
+          git commit -m "diagnostic m1-c"
+          git push -f origin HEAD:m1c

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/mail"
+	"strconv"
 	"strings"
 
 	"hydra/internal/store"
@@ -20,7 +21,7 @@ type SendRequest struct {
 }
 
 // DeriveTransport deduit l'hote et l'utilisateur de la valeur trouvee, la surcharge manuelle gagne.
-func DeriveTransport(secret string, request SendRequest) (SMTPConfig, error) {
+func DeriveTransport(ctx context.Context, resolver MXResolver, secret string, request SendRequest) (SMTPConfig, error) {
 	secret = strings.TrimSpace(secret)
 	if secret == "" {
 		return SMTPConfig{}, errors.New("valeur du secret absente: relancer le scan")
@@ -37,25 +38,17 @@ func DeriveTransport(secret string, request SendRequest) (SMTPConfig, error) {
 		return SMTPConfig{}, errors.New("corps requis, 100000 octets maximum")
 	}
 	username := strings.TrimSpace(request.Username)
-	host := strings.TrimSpace(request.Host)
 	if username == "" {
 		if address, err := mail.ParseAddress(secret); err == nil {
 			username = address.Address
 		}
 	}
-	if host == "" {
-		if _, domain, found := strings.Cut(username, "@"); found && domain != "" {
-			host = "smtp." + domain
-		}
-	}
-	if host == "" {
-		return SMTPConfig{}, errors.New("hote SMTP requis")
-	}
-	if strings.ContainsAny(host, "\r\n /") {
-		return SMTPConfig{}, errors.New("hote SMTP invalide")
-	}
 	if username == "" {
 		return SMTPConfig{}, errors.New("utilisateur SMTP requis")
+	}
+	host, port, err := ResolveHost(ctx, resolver, username, request.Host)
+	if err != nil {
+		return SMTPConfig{}, err
 	}
 	from := strings.TrimSpace(request.From)
 	if from == "" {
@@ -64,9 +57,8 @@ func DeriveTransport(secret string, request SendRequest) (SMTPConfig, error) {
 	if _, err := mail.ParseAddress(from); err != nil {
 		return SMTPConfig{}, errors.New("expediteur invalide")
 	}
-	port := request.Port
-	if port == 0 {
-		port = 587
+	if request.Port != 0 {
+		port = request.Port
 	}
 	if port < 1 || port > 65535 {
 		return SMTPConfig{}, errors.New("port SMTP invalide")
@@ -90,15 +82,16 @@ func (m *Manager) SendHit(ctx context.Context, userID, hitID int64, request Send
 	if err != nil {
 		return err
 	}
-	config, err := DeriveTransport(secret, request)
+	config, err := DeriveTransport(ctx, m.resolver, secret, request)
 	if err != nil {
 		return err
 	}
-	record := store.Send{UserID: userID, HitID: hit.ID, Transport: "smtp", From: config.From, To: config.ControlAddress, Subject: strings.TrimSpace(request.Subject)}
+	record := store.Send{UserID: userID, HitID: hit.ID, Transport: "smtp", From: config.From, To: config.ControlAddress, Subject: strings.TrimSpace(request.Subject), SMTPHost: config.Host, SMTPPort: strconv.Itoa(config.Port), SMTPUser: config.Username}
 	if err := sendSMTP(ctx, config, record.Subject, request.Body); err != nil {
-		record.Status, record.Error = "failed", err.Error()
+		classified := ClassifySMTPError(err)
+		record.Status, record.Error = "failed", classified.Code+": "+classified.Message
 		_ = m.store.RecordSend(ctx, record)
-		return err
+		return classified
 	}
 	record.Status = "sent"
 	return m.store.RecordSend(ctx, record)

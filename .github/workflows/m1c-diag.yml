@@ -95,6 +95,7 @@ jobs:
           fi
       - name: rapport
         run: |
+          set +e
           {
             echo "== gofmt -l =="
             gofmt -l internal/ 2>&1
@@ -108,6 +109,7 @@ jobs:
           git diff > patch.txt
           cat suite-report.txt
       - name: publication
+        if: always()
         run: |
           git config user.name "hydra-bot"
           git config user.email "hydra-bot@users.noreply.github.com"

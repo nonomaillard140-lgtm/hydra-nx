@@ -36,7 +36,6 @@ jobs:
               p.write_text(s, encoding="utf-8")
               print("mx passe en port 25, hote avec arobase tolere")
           PYEOF
-          git diff internal/send/mx.go
       - name: authentification conditionnelle
         run: |
           python3 - <<'PYEOF'
@@ -48,7 +47,7 @@ jobs:
           else:
               old = '\tif config.Username != "" {\n\t\tif err := client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host)); err != nil {\n\t\t\treturn fmt.Errorf("authentification SMTP refusée: %w", err)\n\t\t}\n\t}'
               assert old in s, "ancre auth absente"
-              new = '\tif config.Username != "" {\n\t\tif _, advertised := client.Extension("AUTH"); advertised {\n\t\t\tif err := client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host)); err != nil {\n\t\t\t\treturn fmt.Errorf("authentification SMTP refusée: %w", err)\n\t\t\t}\n\t\t}\n\t}'
+              new = '\tif config.Username != "" {\n\t\tif advertised, _ := client.Extension("AUTH"); advertised {\n\t\t\tif err := client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host)); err != nil {\n\t\t\t\treturn fmt.Errorf("authentification SMTP refusée: %w", err)\n\t\t\t}\n\t\t}\n\t}'
               s = s.replace(old, new, 1)
               p.write_text(s, encoding="utf-8")
               print("auth sautee si non annoncee")
@@ -99,14 +98,14 @@ jobs:
           }
           GOEOF
           fi
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
       - name: controles
         run: |
           gofmt -w internal/
           grep -q 'return candidate, 25, nil' internal/send/mx.go
           grep -q 'strings.Contains(host, "@")' internal/send/mx.go
-          grep -q 'client.Extension("AUTH")' internal/send/smtp.go
-      - name: frontend
-        run: cd web && npm ci --no-audit --no-fund && npm run build
+          grep -q 'advertised, _ := client.Extension("AUTH")' internal/send/smtp.go
       - name: suite complete avant push
         run: |
           go vet ./...

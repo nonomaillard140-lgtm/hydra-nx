@@ -1,0 +1,58 @@
+name: merge-variantes
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: fusion et resolution
+        run: |
+          git fetch origin variantes
+          git merge --no-ff --allow-unrelated-histories origin/variantes -m "fusion variantes: detection sur le chemin de reference" || true
+          echo "--- fichiers en conflit ---"
+          git diff --name-only --diff-filter=U
+          echo "--- reprise des fichiers de la branche variantes ---"
+          for f in internal/scan/scanner.go internal/fuzz/variants_ext.go internal/scan/variants_test.go; do
+            if git cat-file -e origin/variantes:"$f" 2>/dev/null; then
+              git checkout --theirs -- "$f" 2>/dev/null || git checkout origin/variantes -- "$f"
+              git add -- "$f"
+              echo "repris: $f"
+            fi
+          done
+          echo "--- reste des conflits: version de main ---"
+          for f in $(git diff --name-only --diff-filter=U); do
+            git checkout --ours -- "$f"
+            git add -- "$f"
+            echo "main conserve: $f"
+          done
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            echo "conflits restants"; git status --short; exit 1
+          fi
+          if ! grep -q 'extract.Detect(pathConfig.Raw' internal/scan/scanner.go; then
+            echo "detection sur la reference absente"; exit 1
+          fi
+          if ! grep -q 'StatusPlausible' internal/addons/registry_test.go; then
+            echo "test addons ecrase"; exit 1
+          fi
+          echo "resolution coherente"
+      - name: suite complete avant push
+        run: |
+          gofmt -l internal/ | tee /tmp/fmt.txt
+          test ! -s /tmp/fmt.txt
+          go vet ./...
+          go test ./... -count=1
+      - name: push de la fusion
+        run: git push origin HEAD:main

@@ -7,6 +7,6 @@ export type Hit = { id: number; host: string; path: string; vuln: string; servic
 export type Plan = { id: number; name: string; price_cents: number; duration_hours: number; max_devices: number; daily_credits: number; features_json: string };
 export type LicenseItem = { id: number; key: string; plan_id: number; plan_name: string; user_id: number; max_devices: number; expires_at: string; revoked: boolean };
 export type NotificationItem = { id: number; addon: string; channel: string; target: string; enabled: boolean };
-export type SendItem = { id: number; hit_id: number; from_addr: string; to_addr: string; subject: string; status: string; error: string; sent_at: string };
+export type SendItem = { id: number; hit_id: number; from_addr: string; to_addr: string; subject: string; status: string; error: string; smtp_host: string; smtp_port: string; smtp_user: string; sent_at: string };
 export type AuditItem = { id: number; actor_name: string; action: string; target: string; meta_json: string; created_at: string };
 export type Dashboard = { metrics: Record<string, number>; credits_remaining: number; daily_limit: number; queue_depth: number; scope: string };

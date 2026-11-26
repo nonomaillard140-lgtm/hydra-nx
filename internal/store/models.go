@@ -127,6 +127,9 @@ type Notification struct {
 type Send struct {
 	ID        int64     `json:"id"`
 	HitID     int64     `json:"hit_id"`
+	SMTPHost  string    `json:"smtp_host"`
+	SMTPPort  string    `json:"smtp_port"`
+	SMTPUser  string    `json:"smtp_user"`
 	UserID    int64     `json:"user_id"`
 	Transport string    `json:"transport"`
 	From      string    `json:"from_addr"`

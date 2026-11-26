@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -37,6 +38,15 @@ func (s *Server) handleSendControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.sender.SendControl(r.Context(), currentUser(r.Context()).ID, request.Subject, request.Body); err != nil {
+		var classified *send.SMTPError
+		if errors.As(err, &classified) {
+			status := http.StatusBadGateway
+			if classified.Kind == "configuration" {
+				status = http.StatusUnprocessableEntity
+			}
+			writeJSON(w, status, map[string]string{"error": classified.Message, "code": classified.Code, "field": classified.Field})
+			return
+		}
 		writeError(w, http.StatusBadGateway, cleanMessage(err))
 		return
 	}

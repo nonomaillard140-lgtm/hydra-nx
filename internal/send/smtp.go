@@ -26,10 +26,15 @@ type SMTPConfig struct {
 }
 
 type Manager struct {
-	store *store.Store
+	store    *store.Store
+	resolver MXResolver
 }
 
-func NewManager(st *store.Store) *Manager { return &Manager{store: st} }
+func NewManager(st *store.Store) *Manager {
+	return &Manager{store: st, resolver: NetMXResolver{}}
+}
+
+func (m *Manager) SetResolver(resolver MXResolver) { m.resolver = resolver }
 
 func (m *Manager) Configure(ctx context.Context, config SMTPConfig) error {
 	if err := validateConfig(config); err != nil {
@@ -66,7 +71,7 @@ func (m *Manager) Config(ctx context.Context) (SMTPConfig, error) {
 }
 
 func validateConfig(config SMTPConfig) error {
-	if config.Host == "" || strings.ContainsAny(config.Host, "\r\n /") {
+	if config.Host != "" && strings.ContainsAny(config.Host, "\r\n /") {
 		return errors.New("hôte SMTP invalide")
 	}
 	if _, err := mail.ParseAddress(config.From); err != nil {
@@ -90,11 +95,21 @@ func (m *Manager) SendControl(ctx context.Context, userID int64, subject, body s
 	if len(body) > 100000 || len(subject) > 200 {
 		return errors.New("message de contrôle trop volumineux")
 	}
-	record := store.Send{UserID: userID, Transport: "smtp", From: config.From, To: config.ControlAddress, Subject: subject}
-	if err := sendSMTP(ctx, config, subject, body); err != nil {
-		record.Status, record.Error = "failed", err.Error()
+	host, port, err := ResolveHost(ctx, m.resolver, config.Username, config.Host)
+	if err != nil {
+		return &SMTPError{Code: "hote_injoignable", Field: "host", Kind: "configuration", Message: err.Error(), Cause: err}
+	}
+	if config.Port != 0 {
+		port = config.Port
+	}
+	attempt := config
+	attempt.Host, attempt.Port = host, port
+	record := store.Send{UserID: userID, Transport: "smtp", From: attempt.From, To: attempt.ControlAddress, Subject: subject, SMTPHost: host, SMTPPort: strconv.Itoa(port), SMTPUser: attempt.Username}
+	if err := sendSMTP(ctx, attempt, subject, body); err != nil {
+		classified := ClassifySMTPError(err)
+		record.Status, record.Error = "failed", classified.Code+": "+classified.Message
 		_ = m.store.RecordSend(ctx, record)
-		return err
+		return classified
 	}
 	record.Status = "sent"
 	return m.store.RecordSend(ctx, record)

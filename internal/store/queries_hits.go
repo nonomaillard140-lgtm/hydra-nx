@@ -176,12 +176,12 @@ func (s *Store) DeleteNotification(ctx context.Context, id, userID int64) error 
 }
 
 func (s *Store) RecordSend(ctx context.Context, send Send) error {
-	_, err := s.db.ExecContext(ctx, "INSERT INTO sends(hit_id,user_id,transport,from_addr,to_addr,subject,status,error) VALUES(NULLIF(?,0),?,?,?,?,?,?,?)", send.HitID, send.UserID, send.Transport, send.From, send.To, send.Subject, send.Status, send.Error)
+	_, err := s.db.ExecContext(ctx, "INSERT INTO sends(hit_id,user_id,transport,from_addr,to_addr,subject,status,error,smtp_host,smtp_port,smtp_user) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?)", send.HitID, send.UserID, send.Transport, send.From, send.To, send.Subject, send.Status, send.Error, send.SMTPHost, send.SMTPPort, send.SMTPUser)
 	return err
 }
 
 func (s *Store) Sends(ctx context.Context, userID int64) ([]Send, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id,hit_id,user_id,transport,from_addr,to_addr,subject,status,error,sent_at FROM sends WHERE ?=0 OR user_id=? ORDER BY id DESC LIMIT 200", userID, userID)
+	rows, err := s.db.QueryContext(ctx, "SELECT id,COALESCE(hit_id,0),user_id,transport,from_addr,to_addr,subject,status,error,smtp_host,smtp_port,smtp_user,sent_at FROM sends WHERE ?=0 OR user_id=? ORDER BY id DESC LIMIT 200", userID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (s *Store) Sends(ctx context.Context, userID int64) ([]Send, error) {
 	out := make([]Send, 0)
 	for rows.Next() {
 		var item Send
-		if err := rows.Scan(&item.ID, &item.HitID, &item.UserID, &item.Transport, &item.From, &item.To, &item.Subject, &item.Status, &item.Error, &item.SentAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.HitID, &item.UserID, &item.Transport, &item.From, &item.To, &item.Subject, &item.Status, &item.Error, &item.SMTPHost, &item.SMTPPort, &item.SMTPUser, &item.SentAt); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

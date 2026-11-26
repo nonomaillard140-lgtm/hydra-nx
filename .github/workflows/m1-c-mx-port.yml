@@ -25,9 +25,9 @@ jobs:
           if 'return candidate, 25, nil' in s:
               print("correctif deja en place")
           else:
-              old = '\thost = strings.TrimSpace(host)\n\tif host != "" {\n\t\tif strings.ContainsAny(host, "\\r\\n /") {\n\t\t\treturn "", 0, errors.New("hote SMTP invalide")\n\t\t}\n\t\treturn host, 587, nil\n\t}'
+              old = '\thost = strings.TrimSpace(host)\n\tif host != "" {\n'
               assert old in s, "ancre entete absente"
-              new = '\thost = strings.TrimSpace(host)\n\tif strings.Contains(host, "@") {\n\t\tif _, domain, found := strings.Cut(host, "@"); found {\n\t\t\thost = strings.TrimSuffix(strings.TrimSpace(domain), ".")\n\t\t}\n\t}\n\tif host != "" {\n\t\tif strings.ContainsAny(host, "\\r\\n /") {\n\t\t\treturn "", 0, errors.New("hote SMTP invalide")\n\t\t}\n\t\treturn host, 587, nil\n\t}'
+              new = '\thost = strings.TrimSpace(host)\n\tif strings.Contains(host, "@") {\n\t\tif _, domain, found := strings.Cut(host, "@"); found {\n\t\t\thost = strings.TrimSuffix(strings.TrimSpace(domain), ".")\n\t\t}\n\t}\n\tif host != "" {\n'
               s = s.replace(old, new, 1)
               assert 'return candidate, 587, nil' in s, "ancre mx absente"
               s = s.replace('return candidate, 587, nil', 'return candidate, 25, nil', 1)
@@ -36,6 +36,7 @@ jobs:
               p.write_text(s, encoding="utf-8")
               print("mx passe en port 25, hote avec arobase tolere")
           PYEOF
+          git diff internal/send/mx.go
       - name: authentification conditionnelle
         run: |
           python3 - <<'PYEOF'
@@ -101,6 +102,7 @@ jobs:
       - name: controles
         run: |
           gofmt -w internal/
+          go build ./... 
           grep -q 'return candidate, 25, nil' internal/send/mx.go
           grep -q 'strings.Contains(host, "@")' internal/send/mx.go
           grep -q 'client.Extension("AUTH")' internal/send/smtp.go

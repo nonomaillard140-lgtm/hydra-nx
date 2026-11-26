@@ -1,0 +1,1 @@
+ALTER TABLE hits ADD COLUMN secret_enc TEXT NOT NULL DEFAULT '';

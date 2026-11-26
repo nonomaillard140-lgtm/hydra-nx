@@ -252,8 +252,9 @@ func (s *Scanner) recordExposure(ctx context.Context, crack store.Crack, host, r
 		rating := score.Score(exposure.Vuln, service, len(findings))
 		result := s.addons.Validate(ctx, addons.Evidence{Service: service, Redacted: finding.Redacted, Hash: finding.ValueHash, Value: finding.Value})
 		smtpUsable := result.Status == addons.StatusPlausible && (service == "smtp" || service == "o365")
+		secretEnc, _ := s.store.Encrypt(finding.Value)
 		hit, err := s.store.UpsertHit(ctx, store.Hit{CrackID: crack.ID, UserID: crack.UserID, Host: host, Path: requestPath,
-			Vuln: exposure.Vuln, Service: service, SecretRedacted: finding.Redacted, SecretHash: s.store.Fingerprint(finding.ValueHash),
+			Vuln: exposure.Vuln, Service: service, SecretRedacted: finding.Redacted, SecretHash: s.store.Fingerprint(finding.ValueHash), SecretEnc: secretEnc,
 			Status: string(result.Status), Points: rating.Points, CashScore: rating.Priority, SMTPUsable: smtpUsable})
 		if err != nil {
 			return created, err

@@ -54,6 +54,7 @@ func (s *Server) Router() http.Handler {
 		private.Get("/api/scans/{id}", s.handleScan)
 		private.Get("/api/hits", s.handleHits)
 		private.Get("/api/hits/export.csv", s.handleHitsExport)
+		private.Post("/api/hits/{id}/send", s.handleHitSend)
 		private.Get("/api/addons", s.handleAddons)
 		private.Get("/api/notifications", s.handleNotifications)
 		private.Post("/api/notifications", s.handleSaveNotification)

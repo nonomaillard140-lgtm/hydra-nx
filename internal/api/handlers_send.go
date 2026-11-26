@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"hydra/internal/send"
 )
@@ -40,6 +41,25 @@ func (s *Server) handleSendControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "message de contrôle envoyé"})
+}
+
+func (s *Server) handleHitSend(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errInvalidID.Error())
+		return
+	}
+	var request send.SendRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	user := currentUser(r.Context())
+	if err := s.sender.SendHit(r.Context(), user.ID, id, request); err != nil {
+		writeError(w, http.StatusBadGateway, cleanMessage(err))
+		return
+	}
+	_ = s.store.Audit(r.Context(), user.ID, "send.hit", strconv.FormatInt(id, 10), "{}")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "message envoyé"})
 }
 
 func (s *Server) handleSendHistory(w http.ResponseWriter, r *http.Request) {

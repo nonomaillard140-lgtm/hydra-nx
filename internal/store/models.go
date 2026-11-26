@@ -90,6 +90,7 @@ type Hit struct {
 	Service        string    `json:"service"`
 	SecretRedacted string    `json:"secret_redacted"`
 	SecretHash     string    `json:"-"`
+	SecretEnc      string    `json:"-"`
 	Status         string    `json:"status"`
 	Points         int       `json:"points"`
 	CashScore      int       `json:"cash_score"`
@@ -125,6 +126,7 @@ type Notification struct {
 
 type Send struct {
 	ID        int64     `json:"id"`
+	HitID     int64     `json:"hit_id"`
 	UserID    int64     `json:"user_id"`
 	Transport string    `json:"transport"`
 	From      string    `json:"from_addr"`

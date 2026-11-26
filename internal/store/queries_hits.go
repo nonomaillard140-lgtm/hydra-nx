@@ -23,13 +23,13 @@ func (s *Store) UpsertHit(ctx context.Context, hit Hit) (Hit, error) {
 	var existingID int64
 	err = tx.QueryRowContext(ctx, "SELECT id FROM hits WHERE secret_hash=? AND service=?", hit.SecretHash, hit.Service).Scan(&existingID)
 	if err == nil {
-		if _, err := tx.ExecContext(ctx, `UPDATE hits SET crack_id=?,user_id=?,host=?,path=?,vuln=?,secret_redacted=?,status=?,points=?,cash_score=?,smtp_usable=?,last_seen=? WHERE id=?`,
-			hit.CrackID, hit.UserID, hit.Host, hit.Path, hit.Vuln, hit.SecretRedacted, hit.Status, hit.Points, hit.CashScore, hit.SMTPUsable, time.Now().UTC(), existingID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE hits SET crack_id=?,user_id=?,host=?,path=?,vuln=?,secret_redacted=?,secret_enc=?,status=?,points=?,cash_score=?,smtp_usable=?,last_seen=? WHERE id=?`,
+			hit.CrackID, hit.UserID, hit.Host, hit.Path, hit.Vuln, hit.SecretRedacted, hit.SecretEnc, hit.Status, hit.Points, hit.CashScore, hit.SMTPUsable, time.Now().UTC(), existingID); err != nil {
 			return Hit{}, err
 		}
 	} else if errors.Is(err, sql.ErrNoRows) {
-		result, err := tx.ExecContext(ctx, `INSERT INTO hits(crack_id,user_id,host,path,vuln,service,secret_redacted,secret_hash,status,points,cash_score,smtp_usable)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, hit.CrackID, hit.UserID, hit.Host, hit.Path, hit.Vuln, hit.Service, hit.SecretRedacted, hit.SecretHash, hit.Status, hit.Points, hit.CashScore, hit.SMTPUsable)
+		result, err := tx.ExecContext(ctx, `INSERT INTO hits(crack_id,user_id,host,path,vuln,service,secret_redacted,secret_hash,secret_enc,status,points,cash_score,smtp_usable)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, hit.CrackID, hit.UserID, hit.Host, hit.Path, hit.Vuln, hit.Service, hit.SecretRedacted, hit.SecretHash, hit.SecretEnc, hit.Status, hit.Points, hit.CashScore, hit.SMTPUsable)
 		if err != nil {
 			return Hit{}, err
 		}
@@ -46,12 +46,12 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, hit.CrackID, hit.UserID, hit.Host, hit.Path, h
 func scanHit(scanner interface{ Scan(...any) error }) (Hit, error) {
 	var h Hit
 	var smtp int
-	err := scanner.Scan(&h.ID, &h.CrackID, &h.UserID, &h.Host, &h.Path, &h.Vuln, &h.Service, &h.SecretRedacted, &h.SecretHash, &h.Status, &h.Points, &h.CashScore, &smtp, &h.FirstSeen, &h.LastSeen)
+	err := scanner.Scan(&h.ID, &h.CrackID, &h.UserID, &h.Host, &h.Path, &h.Vuln, &h.Service, &h.SecretRedacted, &h.SecretHash, &h.SecretEnc, &h.Status, &h.Points, &h.CashScore, &smtp, &h.FirstSeen, &h.LastSeen)
 	h.SMTPUsable = smtp != 0
 	return h, err
 }
 
-const hitColumns = "id,crack_id,user_id,host,path,vuln,service,secret_redacted,secret_hash,status,points,cash_score,smtp_usable,first_seen,last_seen"
+const hitColumns = "id,crack_id,user_id,host,path,vuln,service,secret_redacted,secret_hash,secret_enc,status,points,cash_score,smtp_usable,first_seen,last_seen"
 
 func (s *Store) HitByID(ctx context.Context, id, userID int64) (Hit, error) {
 	h, err := scanHit(s.db.QueryRowContext(ctx, "SELECT "+hitColumns+" FROM hits WHERE id=? AND (?=0 OR user_id=?)", id, userID, userID))
@@ -176,12 +176,12 @@ func (s *Store) DeleteNotification(ctx context.Context, id, userID int64) error 
 }
 
 func (s *Store) RecordSend(ctx context.Context, send Send) error {
-	_, err := s.db.ExecContext(ctx, "INSERT INTO sends(hit_id,user_id,transport,from_addr,to_addr,subject,status,error) VALUES(NULL,?,?,?,?,?,?,?)", send.UserID, send.Transport, send.From, send.To, send.Subject, send.Status, send.Error)
+	_, err := s.db.ExecContext(ctx, "INSERT INTO sends(hit_id,user_id,transport,from_addr,to_addr,subject,status,error) VALUES(NULLIF(?,0),?,?,?,?,?,?,?)", send.HitID, send.UserID, send.Transport, send.From, send.To, send.Subject, send.Status, send.Error)
 	return err
 }
 
 func (s *Store) Sends(ctx context.Context, userID int64) ([]Send, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id,user_id,transport,from_addr,to_addr,subject,status,error,sent_at FROM sends WHERE ?=0 OR user_id=? ORDER BY id DESC LIMIT 200", userID, userID)
+	rows, err := s.db.QueryContext(ctx, "SELECT id,hit_id,user_id,transport,from_addr,to_addr,subject,status,error,sent_at FROM sends WHERE ?=0 OR user_id=? ORDER BY id DESC LIMIT 200", userID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (s *Store) Sends(ctx context.Context, userID int64) ([]Send, error) {
 	out := make([]Send, 0)
 	for rows.Next() {
 		var item Send
-		if err := rows.Scan(&item.ID, &item.UserID, &item.Transport, &item.From, &item.To, &item.Subject, &item.Status, &item.Error, &item.SentAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.HitID, &item.UserID, &item.Transport, &item.From, &item.To, &item.Subject, &item.Status, &item.Error, &item.SentAt); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

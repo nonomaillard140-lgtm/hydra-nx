@@ -1,0 +1,69 @@
+name: m1-a-fix
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: normalisation dans ResolveHost
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib
+          p = pathlib.Path("internal/send/mx.go")
+          s = p.read_text(encoding="utf-8")
+          if "TrimSuffix(strings.TrimSpace(candidate)" in s:
+              print("normalisation deja en place")
+          else:
+              old = '\tif resolver != nil {\n\t\tif hosts, lookupErr := resolver.Lookup(ctx, domain); lookupErr == nil && len(hosts) > 0 {\n\t\t\treturn hosts[0], 587, nil\n\t\t}\n\t}'
+              assert old in s, "ancre resolution absente"
+              new = '\tif resolver != nil {\n\t\tif hosts, lookupErr := resolver.Lookup(ctx, domain); lookupErr == nil {\n\t\t\tfor _, candidate := range hosts {\n\t\t\t\tcandidate = strings.TrimSuffix(strings.TrimSpace(candidate), ".")\n\t\t\t\tif candidate == "" || strings.ContainsAny(candidate, "\\r\\n /") {\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t\treturn candidate, 587, nil\n\t\t\t}\n\t\t}\n\t}'
+              s = s.replace(old, new, 1)
+              p.write_text(s, encoding="utf-8")
+              print("normalisation deplacee dans ResolveHost")
+          PYEOF
+      - name: hit_id nullable
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib
+          p = pathlib.Path("internal/store/queries_hits.go")
+          s = p.read_text(encoding="utf-8")
+          if "COALESCE(hit_id,0)" in s:
+              print("coalesce deja en place")
+          else:
+              old = '"SELECT id,hit_id,user_id,transport'
+              assert old in s, "ancre select absente"
+              s = s.replace(old, '"SELECT id,COALESCE(hit_id,0),user_id,transport', 1)
+              p.write_text(s, encoding="utf-8")
+              print("hit_id rendu non nul a la lecture")
+          PYEOF
+      - name: controles
+        run: |
+          gofmt -w internal/
+          grep -q 'TrimSuffix(strings.TrimSpace(candidate)' internal/send/mx.go
+          grep -q 'COALESCE(hit_id,0)' internal/store/queries_hits.go
+          if git diff --name-only | grep -q 'internal/send/hit.go'; then echo "hit.go modifie"; exit 1; fi
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: suite complete avant push
+        run: |
+          go vet ./...
+          go build ./...
+          go test ./... -count=1
+      - name: commit et push
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "hydra-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "resolution: normalisation du MX, historique: hit_id nullable"
+          git push origin HEAD:main

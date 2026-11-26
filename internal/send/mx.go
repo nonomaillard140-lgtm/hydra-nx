@@ -81,9 +81,14 @@ func domainOf(identity string) (string, error) {
 	return strings.ToLower(domain), nil
 }
 
-// ResolveHost deduit l'hote et le port: hote fourni, puis MX, puis table de secours, puis convention.
+// ResolveHost deduit l'hote et le port: hote fourni, puis MX en 25, puis table de secours, puis convention en 587.
 func ResolveHost(ctx context.Context, resolver MXResolver, username, host string) (string, int, error) {
 	host = strings.TrimSpace(host)
+	if strings.Contains(host, "@") {
+		if _, domain, found := strings.Cut(host, "@"); found {
+			host = strings.TrimSuffix(strings.TrimSpace(domain), ".")
+		}
+	}
 	if host != "" {
 		if strings.ContainsAny(host, "\r\n /") {
 			return "", 0, errors.New("hote SMTP invalide")
@@ -101,7 +106,7 @@ func ResolveHost(ctx context.Context, resolver MXResolver, username, host string
 				if candidate == "" || strings.ContainsAny(candidate, "\r\n /") {
 					continue
 				}
-				return candidate, 587, nil
+				return candidate, 25, nil
 			}
 		}
 	}

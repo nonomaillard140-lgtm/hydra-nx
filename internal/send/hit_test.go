@@ -47,7 +47,7 @@ func TestDeriveTransportUsesMX(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Host != "mx1.exemple.tld" || config.Port != 587 || resolver.calls != 1 || resolver.domain != "exemple.tld" {
+	if config.Host != "mx1.exemple.tld" || config.Port != 25 || resolver.calls != 1 || resolver.domain != "exemple.tld" {
 		t.Fatalf("mx non utilise: %+v %+v", config, resolver)
 	}
 }

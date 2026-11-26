@@ -31,7 +31,7 @@ func TestResolveHostUsesFirstMX(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if host != "mx1.exemple.tld" || port != 587 || resolver.calls != 1 || resolver.domain != "exemple.tld" {
+	if host != "mx1.exemple.tld" || port != 25 || resolver.calls != 1 || resolver.domain != "exemple.tld" {
 		t.Fatalf("resolution inattendue: %s %d %+v", host, port, resolver)
 	}
 }
@@ -163,5 +163,27 @@ func TestRecordSendKeepsTransport(t *testing.T) {
 	}
 	if items[0].HitID != 0 {
 		t.Fatalf("hit_id nul mal lu: %d", items[0].HitID)
+	}
+}
+
+func TestResolveHostMXUsesPort25(t *testing.T) {
+	resolver := &fakeResolver{hosts: []string{"mx1.exemple.tld."}}
+	host, port, err := send.ResolveHost(context.Background(), resolver, "bob@exemple.tld", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "mx1.exemple.tld" || port != 25 {
+		t.Fatalf("mx en port inattendu: %s %d", host, port)
+	}
+}
+
+func TestResolveHostAcceptsAddressInHostField(t *testing.T) {
+	resolver := &fakeResolver{hosts: []string{"mx.exemple.tld."}}
+	host, port, err := send.ResolveHost(context.Background(), resolver, "bob@exemple.tld", "bob@mail.exemple.tld")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "mail.exemple.tld" || port != 587 || resolver.calls != 0 {
+		t.Fatalf("adresse non ramenee au domaine: %s %d %d", host, port, resolver.calls)
 	}
 }

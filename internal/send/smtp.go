@@ -172,8 +172,10 @@ func sendOnPort(ctx context.Context, config SMTPConfig, port int, subject, body 
 	}
 	defer client.Close()
 	if config.Username != "" {
-		if err := client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host)); err != nil {
-			return fmt.Errorf("authentification SMTP refusée: %w", err)
+		if advertised, _ := client.Extension("AUTH"); advertised {
+			if err := client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host)); err != nil {
+				return fmt.Errorf("authentification SMTP refusée: %w", err)
+			}
 		}
 	}
 	if err := client.Mail(config.From); err != nil {

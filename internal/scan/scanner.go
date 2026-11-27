@@ -306,7 +306,7 @@ func (s *Scanner) jsIntel(ctx context.Context, crack store.Crack, base *url.URL,
 				stats.Hits += created
 			}
 		}
-		for _, mapping := range jsintel.Maps(response.Body) {
+		for _, mapping := range jsintel.Maps(response.Body, base) {
 			mapped, err := s.get(ctx, mapping)
 			stats.Requests++
 			if err != nil || mapped.Status != 200 {

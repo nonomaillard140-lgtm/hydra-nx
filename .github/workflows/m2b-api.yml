@@ -120,7 +120,9 @@ jobs:
           		request, _ := http.NewRequest(method, server.URL+path, reader)
           		request.Header.Set("Content-Type", "application/json")
           		request.Header.Set("X-Requested-With", "XMLHttpRequest")
-          		request.AddCookie(cookie)
+          		if cookie != nil {
+          			request.AddCookie(cookie)
+          		}
           		response, err := http.DefaultClient.Do(request)
           		if err != nil {
           			t.Fatal(err)

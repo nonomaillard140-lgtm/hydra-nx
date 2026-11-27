@@ -1,0 +1,254 @@
+name: m2a-diag
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: paquet jsintel
+        run: |
+          mkdir -p internal/jsintel
+          cat > internal/jsintel/jsintel.go <<'GOEOF'
+          package jsintel
+
+          import (
+          	"net/url"
+          	"regexp"
+          	"sort"
+          	"strconv"
+          	"strings"
+          )
+
+          const MaxScripts = 12
+
+          var (
+          	scriptPattern   = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+)["']`)
+          	mapPattern      = regexp.MustCompile(`(?i)sourcemappingurl=([^\s*]+)`)
+          	endpointPattern = regexp.MustCompile("[\"'\x60](/(?:api|v1|v2|graphql|rest|admin|internal|auth)[a-zA-Z0-9_\\-/.]*)[\"'\x60]")
+          )
+
+          func absolute(base *url.URL, ref string) (string, bool) {
+          	ref = strings.TrimSpace(ref)
+          	if ref == "" || strings.HasPrefix(ref, "data:") {
+          		return "", false
+          	}
+          	parsed, err := base.Parse(ref)
+          	if err != nil || parsed.Host != base.Host {
+          		return "", false
+          	}
+          	parsed.Fragment = ""
+          	return parsed.String(), true
+          }
+
+          func Scripts(page []byte, base *url.URL) []string {
+          	seen := make(map[string]struct{})
+          	out := make([]string, 0, MaxScripts)
+          	for _, match := range scriptPattern.FindAllSubmatch(page, 200) {
+          		full, ok := absolute(base, string(match[1]))
+          		if !ok {
+          			continue
+          		}
+          		if _, duplicate := seen[full]; duplicate {
+          			continue
+          		}
+          		seen[full] = struct{}{}
+          		out = append(out, full)
+          		if len(out) >= MaxScripts {
+          			break
+          		}
+          	}
+          	sort.Strings(out)
+          	return out
+          }
+
+          func Maps(body []byte, base *url.URL) []string {
+          	out := make([]string, 0, 4)
+          	for _, match := range mapPattern.FindAllSubmatch(body, 8) {
+          		if full, ok := absolute(base, string(match[1])); ok {
+          			out = append(out, full)
+          		}
+          	}
+          	return out
+          }
+
+          func Endpoints(body []byte) []string {
+          	seen := make(map[string]struct{})
+          	out := make([]string, 0, 32)
+          	for _, match := range endpointPattern.FindAllSubmatch(body, 400) {
+          		path := string(match[1])
+          		if len(path) < 5 || len(path) > 120 {
+          			continue
+          		}
+          		if _, duplicate := seen[path]; duplicate {
+          			continue
+          		}
+          		seen[path] = struct{}{}
+          		out = append(out, path)
+          		if len(out) >= 50 {
+          			break
+          		}
+          	}
+          	sort.Strings(out)
+          	return out
+          }
+
+          type Library struct {
+          	Name       string
+          	Version    string
+          	Vulnerable bool
+          	Note       string
+          }
+
+          type rule struct {
+          	name    string
+          	pattern *regexp.Regexp
+          	fixed   string
+          	note    string
+          }
+
+          var rules = []rule{
+          	{"jquery", regexp.MustCompile(`(?i)jquery[/@-]?v?(\d+\.\d+\.\d+)`), "3.5.0", "CVE-2020-11022 et 11023"},
+          	{"lodash", regexp.MustCompile(`(?i)lodash[/@-]?v?(\d+\.\d+\.\d+)`), "4.17.21", "CVE-2021-23337"},
+          	{"bootstrap", regexp.MustCompile(`(?i)bootstrap[/@-]?v?(\d+\.\d+\.\d+)`), "3.4.1", "CVE-2019-8331"},
+          	{"moment", regexp.MustCompile(`(?i)moment[/@-]?v?(\d+\.\d+\.\d+)`), "2.29.4", "CVE-2022-31129"},
+          	{"angular", regexp.MustCompile(`(?i)angular[/@-]?v?(1\.\d+\.\d+)`), "1.8.0", "CVE-2020-7676"},
+          }
+
+          func Libraries(body []byte) []Library {
+          	out := make([]Library, 0, 4)
+          	seen := make(map[string]struct{})
+          	for _, entry := range rules {
+          		for _, match := range entry.pattern.FindAllSubmatch(body, 5) {
+          			version := string(match[1])
+          			if _, duplicate := seen[entry.name+version]; duplicate {
+          				continue
+          			}
+          			seen[entry.name+version] = struct{}{}
+          			out = append(out, Library{Name: entry.name, Version: version, Vulnerable: less(version, entry.fixed), Note: entry.note})
+          		}
+          	}
+          	return out
+          }
+
+          func less(a, b string) bool {
+          	left := strings.Split(a, ".")
+          	right := strings.Split(b, ".")
+          	for i := 0; i < len(left) && i < len(right); i++ {
+          		x, _ := strconv.Atoi(left[i])
+          		y, _ := strconv.Atoi(right[i])
+          		if x != y {
+          			return x < y
+          		}
+          	}
+          	return len(left) < len(right)
+          }
+          GOEOF
+      - name: greffon et methodes
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib
+          p = pathlib.Path("internal/scan/scanner.go")
+          s = p.read_text(encoding="utf-8")
+          if '"hydra/internal/jsintel"' not in s:
+              s = s.replace('\t"hydra/internal/fuzz"\n', '\t"hydra/internal/fuzz"\n\t"hydra/internal/jsintel"\n', 1)
+          if '"endpoints"' not in s:
+              s = s.replace('\tHits      int `json:"hits"`\n', '\tHits      int `json:"hits"`\n\tEndpoints int `json:"endpoints"`\n', 1)
+          if "s.jsIntel(ctx, crack, base, target, stats)" not in s:
+              s = s.replace('\tvariants := pathConfig.Variants\n', '\ts.jsIntel(ctx, crack, base, target, stats)\n\tvariants := pathConfig.Variants\n', 1)
+          p.write_text(s, encoding="utf-8")
+          print("scanner patche")
+          PYEOF
+          cat >> internal/scan/scanner.go <<'GOEOF'
+
+          func (s *Scanner) jsIntel(ctx context.Context, crack store.Crack, base *url.URL, target string, stats *Stats) {
+          	page, err := s.get(ctx, base.String()+"/")
+          	if err != nil || page.Status >= 400 {
+          		return
+          	}
+          	for _, script := range jsintel.Scripts(page.Body, base) {
+          		if ctx.Err() != nil {
+          			return
+          		}
+          		response, err := s.get(ctx, script)
+          		stats.Requests++
+          		if err != nil || response.Status != 200 {
+          			continue
+          		}
+          		path := "/"
+          		if parsed, err := url.Parse(script); err == nil && parsed.Path != "" {
+          			path = parsed.Path
+          		}
+          		if exposure, ok := extract.Detect(path, response.Body); ok && exposure.Confidence >= 55 {
+          			if created, err := s.recordExposure(ctx, crack, target, path, response, exposure); err == nil {
+          				stats.Hits += created
+          			}
+          		}
+          		stats.Endpoints += len(jsintel.Endpoints(response.Body))
+          		for _, lib := range jsintel.Libraries(response.Body) {
+          			if !lib.Vulnerable {
+          				continue
+          			}
+          			if created, err := s.recordLibrary(ctx, crack, target, path, lib); err == nil {
+          				stats.Hits += created
+          			}
+          		}
+          		for _, mapping := range jsintel.Maps(response.Body) {
+          			mapped, err := s.get(ctx, mapping)
+          			stats.Requests++
+          			if err != nil || mapped.Status != 200 {
+          				continue
+          			}
+          			if exposure, ok := extract.Detect(mapping, mapped.Body); ok && exposure.Confidence >= 55 {
+          				if created, err := s.recordExposure(ctx, crack, target, mapping, mapped, exposure); err == nil {
+          					stats.Hits += created
+          				}
+          			}
+          		}
+          	}
+          }
+
+          func (s *Scanner) recordLibrary(ctx context.Context, crack store.Crack, host, requestPath string, lib jsintel.Library) (int, error) {
+          	rating := score.Score("lib-vulnerable", lib.Name, 1)
+          	hit, err := s.store.UpsertHit(ctx, store.Hit{CrackID: crack.ID, UserID: crack.UserID, Host: host, Path: requestPath,
+          		Vuln: "lib-vulnerable", Service: lib.Name, SecretRedacted: lib.Name + " " + lib.Version,
+          		SecretHash: s.store.Fingerprint(lib.Name + "\x00" + lib.Version + "\x00" + host),
+          		Status: "detected", Points: rating.Points, CashScore: rating.Priority})
+          	if err != nil {
+          		return 0, err
+          	}
+          	if s.OnHit != nil {
+          		s.OnHit(hit)
+          	}
+          	return 1, nil
+          }
+          GOEOF
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: rapport
+        run: |
+          set +e
+          gofmt -w internal/
+          {
+            echo "== go vet =="
+            go vet ./... 2>&1
+            echo "== go build =="
+            go build ./... 2>&1
+          } > suite-report.txt 2>&1
+          cat suite-report.txt
+      - name: publication
+        if: always()
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "hydra-bot@users.noreply.github.com"
+          git checkout -b m2a
+          git add -A
+          git commit -m "diagnostic m2-a"
+          git push -f origin HEAD:m2a

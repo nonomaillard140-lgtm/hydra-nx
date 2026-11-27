@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -89,7 +90,11 @@ func (s *Server) handleDeleteList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.DeleteList(r.Context(), id, ownerID(currentUser(r.Context()))); err != nil {
-		writeError(w, http.StatusNotFound, cleanMessage(err))
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, cleanMessage(err))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, cleanMessage(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -133,7 +138,11 @@ func (s *Server) handleDeletePath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.DeletePath(r.Context(), id, ownerID(currentUser(r.Context()))); err != nil {
-		writeError(w, http.StatusNotFound, cleanMessage(err))
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, cleanMessage(err))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, cleanMessage(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -146,6 +155,17 @@ func (s *Server) handleScans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleClearScans(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r.Context())
+	deleted, err := s.store.ClearScans(r.Context(), ownerID(user))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, cleanMessage(err))
+		return
+	}
+	_ = s.store.Audit(r.Context(), user.ID, "scan.purge", "", store.MarshalJSON(map[string]int64{"deleted": deleted}))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": deleted})
 }
 
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {

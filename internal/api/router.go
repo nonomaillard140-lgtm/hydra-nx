@@ -50,6 +50,7 @@ func (s *Server) Router() http.Handler {
 		private.Post("/api/paths", s.handleCreatePath)
 		private.Delete("/api/paths/{id}", s.handleDeletePath)
 		private.Get("/api/scans", s.handleScans)
+		private.Delete("/api/scans", s.handleClearScans)
 		private.Post("/api/scans", s.handleStartScan)
 		private.Get("/api/scans/{id}", s.handleScan)
 		private.Get("/api/hits", s.handleHits)

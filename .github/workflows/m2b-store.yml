@@ -1,0 +1,278 @@
+name: m2b-store
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  store:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: branche
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "bot@securedosc.work"
+          git fetch origin main
+          git checkout -B m2b origin/main
+      - name: patch
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          inv = pathlib.Path("internal/store/queries_inventory.go")
+          src = inv.read_text()
+          if "func (s *Store) ClearScans(" in src:
+              print("déjà appliqué")
+              raise SystemExit(0)
+
+          def replace_func(text, name, new):
+              start = text.index("func (s *Store) " + name + "(")
+              end = text.index("\n}\n", start) + len("\n}\n")
+              return text[:start] + new + text[end:]
+
+          delete_list = '''func (s *Store) DeleteList(ctx context.Context, id, userID int64) error {
+          	tx, err := s.db.BeginTx(ctx, nil)
+          	if err != nil {
+          		return err
+          	}
+          	defer tx.Rollback()
+          	var exists int
+          	if err := tx.QueryRowContext(ctx, "SELECT COUNT(1) FROM lists WHERE id=? AND (?=0 OR user_id=?)", id, userID, userID).Scan(&exists); err != nil {
+          		return err
+          	}
+          	if exists == 0 {
+          		return ErrNotFound
+          	}
+          	if _, err := tx.ExecContext(ctx, `UPDATE sends SET hit_id=NULL WHERE hit_id IN (
+          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.list_id=?)`, id); err != nil {
+          		return err
+          	}
+          	if _, err := tx.ExecContext(ctx, "UPDATE mailers SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.list_id=?)", id); err != nil {
+          		return err
+          	}
+          	if _, err := tx.ExecContext(ctx, "DELETE FROM hits WHERE crack_id IN (SELECT id FROM cracks WHERE list_id=?)", id); err != nil {
+          		return err
+          	}
+          	if _, err := tx.ExecContext(ctx, "DELETE FROM cracks WHERE list_id=?", id); err != nil {
+          		return err
+          	}
+          	if _, err := tx.ExecContext(ctx, "DELETE FROM lists WHERE id=?", id); err != nil {
+          		return err
+          	}
+          	return tx.Commit()
+          }
+          '''
+
+          delete_path = '''func (s *Store) DeletePath(ctx context.Context, id, userID int64) error {
+          	tx, err := s.db.BeginTx(ctx, nil)
+          	if err != nil {
+          		return err
+          	}
+          	defer tx.Rollback()
+          	var exists int
+          	if err := tx.QueryRowContext(ctx, "SELECT COUNT(1) FROM paths WHERE id=? AND (?=0 OR user_id=?)", id, userID, userID).Scan(&exists); err != nil {
+          		return err
+          	}
+          	if exists == 0 {
+          		return ErrNotFound
+          	}
+          	if _, err := tx.ExecContext(ctx, `UPDATE sends SET hit_id=NULL WHERE hit_id IN (
+          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.path_id=?)`, id); err != nil {
+          		return err
+          	}
+          	if _, err := tx.ExecContext(ctx, "UPDATE mailers SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.path_id=?)", id); err != nil {
+          		return err
+          	}
+          	if _, err := tx.ExecContext(ctx, "DELETE FROM hits WHERE crack_id IN (SELECT id FROM cracks WHERE path_id=?)", id); err != nil {
+          		return err
+          	}
+          	if _, err := tx.ExecContext(ctx, "DELETE FROM cracks WHERE path_id=?", id); err != nil {
+          		return err
+          	}
+          	if _, err := tx.ExecContext(ctx, "DELETE FROM paths WHERE id=?", id); err != nil {
+          		return err
+          	}
+          	return tx.Commit()
+          }
+          '''
+
+          clear_scans = '''
+          const purgeableScans = `status IN ('completed','failed','cancelled') AND (?=0 OR user_id=?)`
+
+          func (s *Store) ClearScans(ctx context.Context, userID int64) (int64, error) {
+          	tx, err := s.db.BeginTx(ctx, nil)
+          	if err != nil {
+          		return 0, err
+          	}
+          	defer tx.Rollback()
+          	if _, err := tx.ExecContext(ctx, `UPDATE sends SET hit_id=NULL WHERE hit_id IN (
+          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE `+purgeableScans+`)`, userID, userID); err != nil {
+          		return 0, err
+          	}
+          	if _, err := tx.ExecContext(ctx, `UPDATE mailers SET hit_id=NULL WHERE hit_id IN (
+          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE `+purgeableScans+`)`, userID, userID); err != nil {
+          		return 0, err
+          	}
+          	if _, err := tx.ExecContext(ctx, `DELETE FROM hits WHERE crack_id IN (SELECT id FROM cracks WHERE `+purgeableScans+`)`, userID, userID); err != nil {
+          		return 0, err
+          	}
+          	result, err := tx.ExecContext(ctx, `DELETE FROM cracks WHERE `+purgeableScans, userID, userID)
+          	if err != nil {
+          		return 0, err
+          	}
+          	count, _ := result.RowsAffected()
+          	return count, tx.Commit()
+          }
+          '''
+
+          src = replace_func(src, "DeleteList", delete_list)
+          src = replace_func(src, "DeletePath", delete_path)
+          inv.write_text(src + clear_scans)
+
+          tests = pathlib.Path("internal/store/store_test.go")
+          body = tests.read_text()
+          body = body.replace('import (\n\t"context"\n', 'import (\n\t"context"\n\t"errors"\n', 1)
+          body += '''
+          func TestDeleteUsedListPurgesScans(t *testing.T) {
+          	ctx := context.Background()
+          	st := openTestStore(t)
+          	user := adminUser(t, st)
+          	list, err := st.CreateList(ctx, user.ID, "production", "L7", []string{"a.example.com"}, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	path, err := st.CreatePath(ctx, user.ID, "/.env", []string{"/.env"}, "")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	crack, err := st.CreateCrack(ctx, user.ID, list.ID, path.ID, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := st.SetCrackStatus(ctx, crack.ID, "completed", "{}"); err != nil {
+          		t.Fatal(err)
+          	}
+          	hit, err := st.UpsertHit(ctx, store.Hit{CrackID: crack.ID, UserID: user.ID, Host: "a.example.com", Path: "/.env", Vuln: "env_exposure", Service: "database", SecretRedacted: "DB_PASSWORD=<redacted>", SecretHash: st.Fingerprint("liste"), Status: "detected_unvalidated"})
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := st.RecordSend(ctx, store.Send{HitID: hit.ID, UserID: user.ID, Transport: "smtp", From: "a@example.com", To: "b@example.com", Subject: "test", Status: "sent"}); err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := st.DeleteList(ctx, list.ID, user.ID); err != nil {
+          		t.Fatalf("suppression d'une liste utilisée: %v", err)
+          	}
+          	if _, err := st.ListByID(ctx, list.ID, user.ID); !errors.Is(err, store.ErrNotFound) {
+          		t.Fatalf("liste encore présente: %v", err)
+          	}
+          	if cracks, err := st.Cracks(ctx, user.ID, 10); err != nil || len(cracks) != 0 {
+          		t.Fatalf("scans résiduels: %d %v", len(cracks), err)
+          	}
+          	if hits, err := st.Hits(ctx, user.ID, "", "", "", 10); err != nil || len(hits) != 0 {
+          		t.Fatalf("hits résiduels: %d %v", len(hits), err)
+          	}
+          	sends, err := st.Sends(ctx, user.ID)
+          	if err != nil || len(sends) != 1 || sends[0].HitID != 0 {
+          		t.Fatalf("historique d'envoi altéré: %+v %v", sends, err)
+          	}
+          }
+
+          func TestDeleteUsedPathPurgesScans(t *testing.T) {
+          	ctx := context.Background()
+          	st := openTestStore(t)
+          	user := adminUser(t, st)
+          	list, err := st.CreateList(ctx, user.ID, "production", "L7", []string{"a.example.com"}, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	path, err := st.CreatePath(ctx, user.ID, "/.git/HEAD", []string{"/.git/HEAD"}, "")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	crack, err := st.CreateCrack(ctx, user.ID, list.ID, path.ID, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if _, err := st.UpsertHit(ctx, store.Hit{CrackID: crack.ID, UserID: user.ID, Host: "a.example.com", Path: "/.git/HEAD", Vuln: "git_exposure", Service: "vcs", SecretRedacted: "ref: refs/heads/main", SecretHash: st.Fingerprint("chemin"), Status: "detected_unvalidated"}); err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := st.DeletePath(ctx, path.ID, user.ID); err != nil {
+          		t.Fatalf("suppression d'un chemin utilisé: %v", err)
+          	}
+          	if _, err := st.PathByID(ctx, path.ID, user.ID); !errors.Is(err, store.ErrNotFound) {
+          		t.Fatalf("chemin encore présent: %v", err)
+          	}
+          	if cracks, err := st.Cracks(ctx, user.ID, 10); err != nil || len(cracks) != 0 {
+          		t.Fatalf("scans résiduels: %d %v", len(cracks), err)
+          	}
+          }
+
+          func TestClearScansKeepsActive(t *testing.T) {
+          	ctx := context.Background()
+          	st := openTestStore(t)
+          	user := adminUser(t, st)
+          	list, err := st.CreateList(ctx, user.ID, "production", "L7", []string{"a.example.com"}, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	path, err := st.CreatePath(ctx, user.ID, "/.env", []string{"/.env"}, "")
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	done, err := st.CreateCrack(ctx, user.ID, list.ID, path.ID, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := st.SetCrackStatus(ctx, done.ID, "completed", "{}"); err != nil {
+          		t.Fatal(err)
+          	}
+          	live, err := st.CreateCrack(ctx, user.ID, list.ID, path.ID, true)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := st.SetCrackStatus(ctx, live.ID, "running", "{}"); err != nil {
+          		t.Fatal(err)
+          	}
+          	if _, err := st.UpsertHit(ctx, store.Hit{CrackID: done.ID, UserID: user.ID, Host: "a.example.com", Path: "/.env", Vuln: "env_exposure", Service: "database", SecretRedacted: "DB_PASSWORD=<redacted>", SecretHash: st.Fingerprint("purge"), Status: "detected_unvalidated"}); err != nil {
+          		t.Fatal(err)
+          	}
+          	count, err := st.ClearScans(ctx, user.ID)
+          	if err != nil || count != 1 {
+          		t.Fatalf("purge: %d %v", count, err)
+          	}
+          	cracks, err := st.Cracks(ctx, user.ID, 10)
+          	if err != nil || len(cracks) != 1 || cracks[0].ID != live.ID || cracks[0].Status != "running" {
+          		t.Fatalf("scan actif non conservé: %+v %v", cracks, err)
+          	}
+          	if hits, err := st.Hits(ctx, user.ID, "", "", "", 10); err != nil || len(hits) != 0 {
+          		t.Fatalf("hits résiduels: %d %v", len(hits), err)
+          	}
+          }
+          '''
+          tests.write_text(body)
+          print("patch appliqué")
+          PY
+      - name: format
+        run: |
+          gofmt -w internal/store/queries_inventory.go internal/store/store_test.go
+          test -z "$(gofmt -l .)"
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: contrôles
+        run: |
+          go vet ./...
+          go build ./...
+          go test ./internal/store/... -timeout 180s
+      - name: push
+        run: |
+          git add -A
+          git commit -m "m2-b: suppression transactionnelle des listes et chemins, purge des scans"
+          git push --force origin m2b

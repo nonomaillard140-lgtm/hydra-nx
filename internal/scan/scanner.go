@@ -18,6 +18,7 @@ import (
 	"hydra/internal/addons"
 	"hydra/internal/extract"
 	"hydra/internal/fuzz"
+	"hydra/internal/jsintel"
 	"hydra/internal/score"
 	"hydra/internal/store"
 )
@@ -35,6 +36,7 @@ type Stats struct {
 	Requests  int `json:"requests"`
 	Divergent int `json:"divergent"`
 	Hits      int `json:"hits"`
+	Endpoints int `json:"endpoints"`
 	Errors    int `json:"errors"`
 }
 
@@ -98,6 +100,7 @@ func (s *Scanner) scanTarget(ctx context.Context, crack store.Crack, target stri
 		stats.Errors++
 		return
 	}
+	s.jsIntel(ctx, crack, base, target, stats)
 	variants := pathConfig.Variants
 	if len(variants) == 0 {
 		variants = fuzz.VariantPaths(pathConfig.Raw)
@@ -269,4 +272,66 @@ func (s *Scanner) recordExposure(ctx context.Context, crack store.Crack, host, r
 		}
 	}
 	return created, nil
+}
+
+func (s *Scanner) jsIntel(ctx context.Context, crack store.Crack, base *url.URL, target string, stats *Stats) {
+	page, err := s.get(ctx, base.String()+"/")
+	if err != nil || page.Status >= 400 {
+		return
+	}
+	for _, script := range jsintel.Scripts(page.Body, base) {
+		if ctx.Err() != nil {
+			return
+		}
+		response, err := s.get(ctx, script)
+		stats.Requests++
+		if err != nil || response.Status != 200 {
+			continue
+		}
+		path := "/"
+		if parsed, err := url.Parse(script); err == nil && parsed.Path != "" {
+			path = parsed.Path
+		}
+		if exposure, ok := extract.Detect(path, response.Body); ok && exposure.Confidence >= 55 {
+			if created, err := s.recordExposure(ctx, crack, target, path, response, exposure); err == nil {
+				stats.Hits += created
+			}
+		}
+		stats.Endpoints += len(jsintel.Endpoints(response.Body))
+		for _, lib := range jsintel.Libraries(response.Body) {
+			if !lib.Vulnerable {
+				continue
+			}
+			if created, err := s.recordLibrary(ctx, crack, target, path, lib); err == nil {
+				stats.Hits += created
+			}
+		}
+		for _, mapping := range jsintel.Maps(response.Body) {
+			mapped, err := s.get(ctx, mapping)
+			stats.Requests++
+			if err != nil || mapped.Status != 200 {
+				continue
+			}
+			if exposure, ok := extract.Detect(mapping, mapped.Body); ok && exposure.Confidence >= 55 {
+				if created, err := s.recordExposure(ctx, crack, target, mapping, mapped, exposure); err == nil {
+					stats.Hits += created
+				}
+			}
+		}
+	}
+}
+
+func (s *Scanner) recordLibrary(ctx context.Context, crack store.Crack, host, requestPath string, lib jsintel.Library) (int, error) {
+	rating := score.Score("lib-vulnerable", lib.Name, 1)
+	hit, err := s.store.UpsertHit(ctx, store.Hit{CrackID: crack.ID, UserID: crack.UserID, Host: host, Path: requestPath,
+		Vuln: "lib-vulnerable", Service: lib.Name, SecretRedacted: lib.Name + " " + lib.Version,
+		SecretHash: s.store.Fingerprint(lib.Name + "\x00" + lib.Version + "\x00" + host),
+		Status:     "detected", Points: rating.Points, CashScore: rating.Priority})
+	if err != nil {
+		return 0, err
+	}
+	if s.OnHit != nil {
+		s.OnHit(hit)
+	}
+	return 1, nil
 }

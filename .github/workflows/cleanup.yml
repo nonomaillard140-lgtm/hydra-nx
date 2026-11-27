@@ -1,0 +1,25 @@
+name: cleanup
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: retirer les workflows de chantier
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "bot@securedosc.work"
+          cd .github/workflows
+          for file in m2-a-fix.yml m2-a-jsintel.yml m2-a-push.yml m2-a-push2.yml m2a-diag.yml m2b-api.yml m2b-diag.yml m2b-merge.yml m2b-store.yml cleanup.yml; do
+            git rm -q "$file"
+          done
+          cd ../..
+          git commit -m "chore: ne conserver que ci.yml"
+          git push origin main
+      - name: retirer les branches
+        run: git push origin --delete m2a m2b m2b-diag

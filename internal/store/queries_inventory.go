@@ -94,15 +94,34 @@ func (s *Store) Lists(ctx context.Context, userID int64) ([]List, error) {
 }
 
 func (s *Store) DeleteList(ctx context.Context, id, userID int64) error {
-	result, err := s.db.ExecContext(ctx, "DELETE FROM lists WHERE id=? AND (?=0 OR user_id=?)", id, userID, userID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	count, _ := result.RowsAffected()
-	if count == 0 {
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(1) FROM lists WHERE id=? AND (?=0 OR user_id=?)", id, userID, userID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, "UPDATE sends SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.list_id=?)", id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE mailers SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.list_id=?)", id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM hits WHERE crack_id IN (SELECT id FROM cracks WHERE list_id=?)", id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM cracks WHERE list_id=?", id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM lists WHERE id=?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CreatePath(ctx context.Context, userID int64, raw string, variants []string, tags string) (Path, error) {
@@ -175,15 +194,34 @@ func (s *Store) Paths(ctx context.Context, userID int64) ([]Path, error) {
 }
 
 func (s *Store) DeletePath(ctx context.Context, id, userID int64) error {
-	result, err := s.db.ExecContext(ctx, "DELETE FROM paths WHERE id=? AND (?=0 OR user_id=?)", id, userID, userID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	count, _ := result.RowsAffected()
-	if count == 0 {
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(1) FROM paths WHERE id=? AND (?=0 OR user_id=?)", id, userID, userID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, "UPDATE sends SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.path_id=?)", id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE mailers SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.path_id=?)", id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM hits WHERE crack_id IN (SELECT id FROM cracks WHERE path_id=?)", id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM cracks WHERE path_id=?", id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM paths WHERE id=?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CreateCrack(ctx context.Context, userID, listID, pathID int64, confirmed bool) (Crack, error) {
@@ -285,4 +323,32 @@ func (s *Store) QueuedCracks(ctx context.Context) ([]Crack, error) {
 		cracks = append(cracks, c)
 	}
 	return cracks, rows.Err()
+}
+
+const purgeableScans = `status IN ('completed','failed','cancelled') AND (?=0 OR user_id=?)`
+const purgeableScansAlias = `c.status IN ('completed','failed','cancelled') AND (?=0 OR c.user_id=?)`
+
+func (s *Store) ClearScans(ctx context.Context, userID int64) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE sends SET hit_id=NULL WHERE hit_id IN (
+		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE `+purgeableScansAlias+`)`, userID, userID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE mailers SET hit_id=NULL WHERE hit_id IN (
+		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE `+purgeableScansAlias+`)`, userID, userID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM hits WHERE crack_id IN (SELECT c.id FROM cracks c WHERE `+purgeableScansAlias+`)`, userID, userID); err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM cracks WHERE `+purgeableScans, userID, userID)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := result.RowsAffected()
+	return count, tx.Commit()
 }

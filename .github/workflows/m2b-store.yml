@@ -51,8 +51,7 @@ jobs:
           	if exists == 0 {
           		return ErrNotFound
           	}
-          	if _, err := tx.ExecContext(ctx, `UPDATE sends SET hit_id=NULL WHERE hit_id IN (
-          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.list_id=?)`, id); err != nil {
+          	if _, err := tx.ExecContext(ctx, "UPDATE sends SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.list_id=?)", id); err != nil {
           		return err
           	}
           	if _, err := tx.ExecContext(ctx, "UPDATE mailers SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.list_id=?)", id); err != nil {
@@ -84,8 +83,7 @@ jobs:
           	if exists == 0 {
           		return ErrNotFound
           	}
-          	if _, err := tx.ExecContext(ctx, `UPDATE sends SET hit_id=NULL WHERE hit_id IN (
-          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.path_id=?)`, id); err != nil {
+          	if _, err := tx.ExecContext(ctx, "UPDATE sends SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.path_id=?)", id); err != nil {
           		return err
           	}
           	if _, err := tx.ExecContext(ctx, "UPDATE mailers SET hit_id=NULL WHERE hit_id IN (SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE c.path_id=?)", id); err != nil {
@@ -106,6 +104,7 @@ jobs:
 
           clear_scans = '''
           const purgeableScans = `status IN ('completed','failed','cancelled') AND (?=0 OR user_id=?)`
+          const purgeableScansAlias = `c.status IN ('completed','failed','cancelled') AND (?=0 OR c.user_id=?)`
 
           func (s *Store) ClearScans(ctx context.Context, userID int64) (int64, error) {
           	tx, err := s.db.BeginTx(ctx, nil)
@@ -114,14 +113,14 @@ jobs:
           	}
           	defer tx.Rollback()
           	if _, err := tx.ExecContext(ctx, `UPDATE sends SET hit_id=NULL WHERE hit_id IN (
-          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE `+purgeableScans+`)`, userID, userID); err != nil {
+          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE `+purgeableScansAlias+`)`, userID, userID); err != nil {
           		return 0, err
           	}
           	if _, err := tx.ExecContext(ctx, `UPDATE mailers SET hit_id=NULL WHERE hit_id IN (
-          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE `+purgeableScans+`)`, userID, userID); err != nil {
+          		SELECT h.id FROM hits h JOIN cracks c ON c.id=h.crack_id WHERE `+purgeableScansAlias+`)`, userID, userID); err != nil {
           		return 0, err
           	}
-          	if _, err := tx.ExecContext(ctx, `DELETE FROM hits WHERE crack_id IN (SELECT id FROM cracks WHERE `+purgeableScans+`)`, userID, userID); err != nil {
+          	if _, err := tx.ExecContext(ctx, `DELETE FROM hits WHERE crack_id IN (SELECT c.id FROM cracks c WHERE `+purgeableScansAlias+`)`, userID, userID); err != nil {
           		return 0, err
           	}
           	result, err := tx.ExecContext(ctx, `DELETE FROM cracks WHERE `+purgeableScans, userID, userID)
@@ -266,11 +265,12 @@ jobs:
           test -z "$(gofmt -l .)"
       - name: frontend
         run: cd web && npm ci --no-audit --no-fund && npm run build
-      - name: contrôles
-        run: |
-          go vet ./...
-          go build ./...
-          go test ./internal/store/... -timeout 180s
+      - name: vet
+        run: go vet ./...
+      - name: build
+        run: go build ./...
+      - name: test store
+        run: go test ./internal/store/... -timeout 180s
       - name: push
         run: |
           git add -A

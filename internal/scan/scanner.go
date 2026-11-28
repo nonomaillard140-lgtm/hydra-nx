@@ -19,6 +19,7 @@ import (
 	"hydra/internal/extract"
 	"hydra/internal/fuzz"
 	"hydra/internal/jsintel"
+	"hydra/internal/r2s"
 	"hydra/internal/score"
 	"hydra/internal/store"
 )
@@ -279,6 +280,9 @@ func (s *Scanner) jsIntel(ctx context.Context, crack store.Crack, base *url.URL,
 	if err != nil || page.Status >= 400 {
 		return
 	}
+	if r2s.NextJS(page.Body) {
+		s.probeR2S(ctx, crack, base, target, stats)
+	}
 	for _, script := range jsintel.Scripts(page.Body, base) {
 		if ctx.Err() != nil {
 			return
@@ -327,6 +331,40 @@ func (s *Scanner) recordLibrary(ctx context.Context, crack store.Crack, host, re
 		Vuln: "lib-vulnerable", Service: lib.Name, SecretRedacted: lib.Name + " " + lib.Version,
 		SecretHash: s.store.Fingerprint(lib.Name + "\x00" + lib.Version + "\x00" + host),
 		Status:     "detected", Points: rating.Points, CashScore: rating.Priority})
+	if err != nil {
+		return 0, err
+	}
+	if s.OnHit != nil {
+		s.OnHit(hit)
+	}
+	return 1, nil
+}
+
+func (s *Scanner) probeR2S(ctx context.Context, crack store.Crack, base *url.URL, target string, stats *Stats) {
+	release, err := s.limiter.Acquire(ctx, base.Host)
+	if err != nil {
+		return
+	}
+	defer release()
+	probeURL := *base
+	probeURL.Path = "/"
+	result, err := r2s.Probe(ctx, s.client, &probeURL)
+	stats.Requests++
+	if err != nil || !result.Vulnerable {
+		return
+	}
+	if created, err := s.recordR2S(ctx, crack, target, result); err == nil {
+		stats.Hits += created
+	}
+}
+
+func (s *Scanner) recordR2S(ctx context.Context, crack store.Crack, host string, result r2s.Result) (int, error) {
+	rating := score.Score("r2s-cve-2025-55182", "nextjs", 1)
+	proof := fmt.Sprintf("HTTP %d text/x-component digest:%s", result.Status, result.Digest)
+	hit, err := s.store.UpsertHit(ctx, store.Hit{CrackID: crack.ID, UserID: crack.UserID, Host: host, Path: "/",
+		Vuln: "r2s-cve-2025-55182", Service: "nextjs", SecretRedacted: proof,
+		SecretHash: s.store.Fingerprint("r2s\x00" + host), Status: "detected",
+		Points: rating.Points, CashScore: rating.Priority})
 	if err != nil {
 		return 0, err
 	}

@@ -11,6 +11,8 @@ type Result struct {
 func Score(vuln, service string, findings int) Result {
 	points := 10
 	switch strings.ToLower(vuln) {
+	case "r2s-cve-2025-55182", "rce_confirmed":
+		points = 95
 	case "env_exposure", "wp_config_exposure", "git_exposed":
 		points = 80
 	case "sourcemap_exposure", "backup_exposure":

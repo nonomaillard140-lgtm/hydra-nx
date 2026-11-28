@@ -218,7 +218,7 @@ jobs:
           anchor = '\tif err != nil || page.Status >= 400 {\n\t\treturn\n\t}\n'
           assert anchor in text
           text = text.replace(anchor, anchor + '\tif r2s.NextJS(page.Body) {\n\t\ts.probeR2S(ctx, crack, base, target, stats)\n\t}\n', 1)
-          text += '''
+          text += r'''
           func (s *Scanner) probeR2S(ctx context.Context, crack store.Crack, base *url.URL, target string, stats *Stats) {
               release, err := s.limiter.Acquire(ctx, base.Host)
               if err != nil {

@@ -207,22 +207,17 @@ jobs:
 
           score = pathlib.Path("internal/score/score.go")
           score_text = score.read_text()
-          anchor = '    case "env_exposure", "wp_config_exposure", "git_exposed":\n        points = 80\n'
+          anchor = '\tcase "env_exposure", "wp_config_exposure", "git_exposed":\n\t\tpoints = 80\n'
           assert anchor in score_text
-          score.write_text(score_text.replace(anchor, '    case "r2s-cve-2025-55182", "rce_confirmed":\n        points = 95\n' + anchor, 1))
+          score.write_text(score_text.replace(anchor, '\tcase "r2s-cve-2025-55182", "rce_confirmed":\n\t\tpoints = 95\n' + anchor, 1))
 
           scanner = pathlib.Path("internal/scan/scanner.go")
           text = scanner.read_text()
-          text = text.replace('    "hydra/internal/jsintel"\n', '    "hydra/internal/jsintel"\n    "hydra/internal/r2s"\n', 1)
-          anchor = '''    if err != nil || page.Status >= 400 {
-                  return
-              }
-          '''
+          assert '\t"hydra/internal/jsintel"\n' in text
+          text = text.replace('\t"hydra/internal/jsintel"\n', '\t"hydra/internal/jsintel"\n\t"hydra/internal/r2s"\n', 1)
+          anchor = '\tif err != nil || page.Status >= 400 {\n\t\treturn\n\t}\n'
           assert anchor in text
-          text = text.replace(anchor, anchor + '''    if r2s.NextJS(page.Body) {
-                  s.probeR2S(ctx, crack, base, target, stats)
-              }
-          ''', 1)
+          text = text.replace(anchor, anchor + '\tif r2s.NextJS(page.Body) {\n\t\ts.probeR2S(ctx, crack, base, target, stats)\n\t}\n', 1)
           text += '''
           func (s *Scanner) probeR2S(ctx context.Context, crack store.Crack, base *url.URL, target string, stats *Stats) {
               release, err := s.limiter.Acquire(ctx, base.Host)

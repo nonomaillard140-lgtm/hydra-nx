@@ -1,0 +1,40 @@
+name: r2s-merge
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: branche
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "bot@securedosc.work"
+          git fetch origin main r2s
+          git checkout -B r2s origin/r2s
+          git rebase origin/main
+      - name: format
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: vet
+        run: go vet ./...
+      - name: build
+        run: go build ./...
+      - name: tests
+        run: go test ./... -timeout 180s
+      - name: fusion
+        run: |
+          git checkout -B main origin/main
+          git merge --ff-only r2s
+          git push origin main

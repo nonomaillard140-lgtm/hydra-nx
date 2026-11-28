@@ -1,0 +1,280 @@
+name: r2s
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  r2s:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: branche
+        run: |
+          git config user.name "hydra-bot"
+          git config user.email "bot@securedosc.work"
+          git fetch origin main
+          git checkout -B r2s origin/main
+      - name: patch
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          if pathlib.Path("internal/r2s/r2s.go").exists():
+              print("déjà appliqué")
+              raise SystemExit(0)
+
+          pathlib.Path("internal/r2s").mkdir(parents=True, exist_ok=True)
+          pathlib.Path("internal/r2s/r2s.go").write_text(r'''package r2s
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// CVE-2025-55182 / CVE-2025-66478 — « React2Shell ».
+// Sonde sûre : aucun code n'est exécuté sur la cible, seule la notation
+// « $1:a:a » appliquée à un objet vide provoque l'exception 500 sur les
+// versions vulnérables de React Server Components.
+
+const boundary = "----WebKitFormBoundaryx8jO2oVc6SWP3Sad"
+
+const routerStateTree = "%5B%22%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D"
+
+var markers = []string{"/_next/static/", "self.__next_f", "__next_data__"}
+
+// NextJS reconnaît une page servie par Next.js à partir de son HTML.
+func NextJS(body []byte) bool {
+	lower := bytes.ToLower(body)
+	for _, marker := range markers {
+		if bytes.Contains(lower, []byte(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
+// Payload construit le corps multipart attendu par le protocole RSC.
+func Payload() string {
+	var body strings.Builder
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Disposition: form-data; name=\"1\"\r\n\r\n")
+	body.WriteString("{}\r\n")
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Disposition: form-data; name=\"0\"\r\n\r\n")
+	body.WriteString("[\"$1:a:a\"]\r\n")
+	body.WriteString("--" + boundary + "--\r\n")
+	return body.String()
+}
+
+// Result porte la preuve observée. Vulnerable n'est vrai que sur la
+// combinaison stricte 500 + text/x-component + digest.
+type Result struct {
+	Vulnerable bool
+	Status     int
+	Digest     string
+}
+
+func Probe(ctx context.Context, client *http.Client, target *url.URL) (Result, error) {
+	if client == nil || target == nil {
+		return Result{}, errors.New("client ou cible absent")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), strings.NewReader(Payload()))
+	if err != nil {
+		return Result{}, err
+	}
+	request.Header.Set("User-Agent", "Hydra-Defensive-Scanner/1.0")
+	request.Header.Set("Accept", "text/x-component")
+	request.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	request.Header.Set("Next-Action", "x")
+	request.Header.Set("Next-Router-State-Tree", routerStateTree)
+	request.Header.Set("X-Nextjs-Request-Id", "b5dce965")
+	request.Header.Set("X-Nextjs-Html-Request-Id", "SSTMXm7OJ_g0Ncx6jpQt9")
+	response, err := client.Do(request)
+	if err != nil {
+		return Result{}, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{Status: response.StatusCode}
+	if response.StatusCode != http.StatusInternalServerError {
+		return result, nil
+	}
+	if !strings.Contains(response.Header.Get("Content-Type"), "text/x-component") {
+		return result, nil
+	}
+	offset := bytes.Index(raw, []byte("E{\"digest\""))
+	if offset < 0 {
+		return result, nil
+	}
+	result.Vulnerable = true
+	result.Digest = digest(raw[offset:])
+	return result, nil
+}
+
+func digest(chunk []byte) string {
+	text := string(chunk)
+	start := strings.Index(text, "\"digest\":\"")
+	if start < 0 {
+		return ""
+	}
+	rest := text[start+len("\"digest\":\""):]
+	end := strings.Index(rest, "\"")
+	if end < 0 {
+		return ""
+	}
+	if end > 40 {
+		end = 40
+	}
+	return rest[:end]
+}
+''')
+
+          pathlib.Path("internal/r2s/r2s_test.go").write_text(r'''package r2s_test
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"testing"
+
+	"hydra/internal/r2s"
+)
+
+func TestNextJSFingerprint(t *testing.T) {
+	if !r2s.NextJS([]byte(`<script src="/_next/static/chunks/main.js"></script>`)) {
+		t.Fatal("marqueur Next.js non reconnu")
+	}
+	if r2s.NextJS([]byte(`<html><body>bonjour</body></html>`)) {
+		t.Fatal("faux positif Next.js")
+	}
+}
+
+func TestProbeVulnerable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Next-Action") == "" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/x-component")
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, "0:{\"a\":\"$@1\",\"f\":\"\",\"b\":\"yd-J8UfWl70zwtaAy83s7\"}\n1:E{\"digest\":\"2971658870\"}\n")
+	}))
+	defer server.Close()
+	target, _ := url.Parse(server.URL)
+	result, err := r2s.Probe(context.Background(), server.Client(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Vulnerable || result.Digest != "2971658870" || result.Status != http.StatusInternalServerError {
+		t.Fatalf("sonde non concluante: %+v", result)
+	}
+}
+
+func TestProbePatched(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/x-component")
+		io.WriteString(w, "0:{\"a\":\"$@1\"}\n")
+	}))
+	defer server.Close()
+	target, _ := url.Parse(server.URL)
+	result, err := r2s.Probe(context.Background(), server.Client(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Vulnerable {
+		t.Fatalf("hôte corrigé signalé vulnérable: %+v", result)
+	}
+}
+''')
+
+          score = pathlib.Path("internal/score/score.go")
+          score_text = score.read_text()
+          anchor = '\tcase "env_exposure", "wp_config_exposure", "git_exposed":\n\t\tpoints = 80\n'
+          assert anchor in score_text
+          score.write_text(score_text.replace(anchor, '\tcase "r2s-cve-2025-55182", "rce_confirmed":\n\t\tpoints = 95\n' + anchor, 1))
+
+          scanner = pathlib.Path("internal/scan/scanner.go")
+          text = scanner.read_text()
+          text = text.replace('\t"hydra/internal/jsintel"\n', '\t"hydra/internal/jsintel"\n\t"hydra/internal/r2s"\n', 1)
+          anchor = '''	if err != nil || page.Status >= 400 {
+		return
+	}
+'''
+          assert anchor in text
+          text = text.replace(anchor, anchor + '''	if r2s.NextJS(page.Body) {
+		s.probeR2S(ctx, crack, base, target, stats)
+	}
+''', 1)
+          text += '''
+func (s *Scanner) probeR2S(ctx context.Context, crack store.Crack, base *url.URL, target string, stats *Stats) {
+	release, err := s.limiter.Acquire(ctx, base.Host)
+	if err != nil {
+		return
+	}
+	defer release()
+	probeURL := *base
+	probeURL.Path = "/"
+	result, err := r2s.Probe(ctx, s.client, &probeURL)
+	stats.Requests++
+	if err != nil || !result.Vulnerable {
+		return
+	}
+	if created, err := s.recordR2S(ctx, crack, target, result); err == nil {
+		stats.Hits += created
+	}
+}
+
+func (s *Scanner) recordR2S(ctx context.Context, crack store.Crack, host string, result r2s.Result) (int, error) {
+	rating := score.Score("r2s-cve-2025-55182", "nextjs", 1)
+	proof := fmt.Sprintf("HTTP %d text/x-component digest:%s", result.Status, result.Digest)
+	hit, err := s.store.UpsertHit(ctx, store.Hit{CrackID: crack.ID, UserID: crack.UserID, Host: host, Path: "/",
+		Vuln: "r2s-cve-2025-55182", Service: "nextjs", SecretRedacted: proof,
+		SecretHash: s.store.Fingerprint("r2s\\x00" + host), Status: "detected",
+		Points: rating.Points, CashScore: rating.Priority})
+	if err != nil {
+		return 0, err
+	}
+	if s.OnHit != nil {
+		s.OnHit(hit)
+	}
+	return 1, nil
+}
+'''
+          scanner.write_text(text)
+          print("patch appliqué")
+          PY
+      - name: format
+        run: |
+          gofmt -w internal/r2s internal/scan/scanner.go internal/score/score.go
+          test -z "$(gofmt -l .)"
+      - name: frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: vet
+        run: go vet ./...
+      - name: build
+        run: go build ./...
+      - name: tests
+        run: go test ./internal/r2s/... ./internal/scan/... ./internal/score/... ./internal/store/... -timeout 180s
+      - name: push
+        run: |
+          git add -A
+          git commit -m "r2s: détection CVE-2025-55182 par sonde RSC sans exécution"
+          git push --force origin r2s
